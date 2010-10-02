@@ -42,7 +42,10 @@ Executable agent
         utf8-string,
         network,
         network-bytestring,
-        MonadPrompt,
-        Win32
+        MonadPrompt
+  if os(windows) {
+    Build-Depends: Win32
+  }
+    
   C-Sources: cbits/process-helper.c cbits/input-helper.c
   Extra-Libraries: psapi
