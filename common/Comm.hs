@@ -35,12 +35,10 @@ import qualified Data.ByteString.Lazy.UTF8 as UTF8
 import Data.Binary ( Binary(..), Get(..), Put(..), encode, decode )
 import Foreign.Storable
 import Foreign.C.Types
-
 import Debug.Trace
 import System.IO.Unsafe
 
 import Aion
-import Process
 
 data Channel m = Channel { channSend :: ByteString -> m Int
                          , channRecv :: Int -> m ByteString }

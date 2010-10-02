@@ -1,11 +1,18 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving, GADTs, ExistentialQuantification, MultiParamTypeClasses, RankNTypes #-}
 module AionBot ( AionBot, runAionBot, runTheBot
                , updateState
+               , stateReader
+
+               , parkMouse
+
                , getPlayer
                , getPlayerEntity
                , getTarget
                , getEntities
                , aimTarget
+               , nextTarget
+               , walkToTarget
+               
                ) where
 
 import Data.List
@@ -25,6 +32,7 @@ import Aion
 import Comm ( Channel )
 import qualified Comm as C
 import Math
+import Keys
 
 newtype AionBot a = AionBot { unBot :: MicroThreadT (StateT BotState IO) a }
     deriving ( Monad, MonadMicroThread )
@@ -89,12 +97,12 @@ rotateCamera delta =
     do timeout 2.0 $
                do parkMouse
                   sendMouseBtn C.Down C.R
-                  delay 0.05
-                  c <- getChannel >>= \ch -> liftIO $ C.recvCamera ch
-                  -- target rotation angle
-                  let t_r = snap $ camera_rot c + delta
-                  rotate (camera_rot c) t_r
-       sendMouseBtn C.Up C.R
+                  finally (sendMouseBtn C.Up C.R) $ do
+                    delay 0.05
+                    c <- getChannel >>= \ch -> liftIO $ C.recvCamera ch
+                    -- target rotation angle
+                    let t_r = snap $ camera_rot c + delta
+                    rotate (camera_rot c) t_r
        delay 0.05
        return ()
     where
@@ -139,6 +147,52 @@ aimTarget =
        case t of
          Nothing -> return ()
          Just t  -> aimEntity t
+
+-- select next target, give up if can't within small timeout
+nextTarget :: AionBot ()
+nextTarget =
+    do t <- getTarget
+       sendKeyPress keyNextTarget
+       timeout 2 (next t)
+       return ()
+  where
+    next t =
+        do t' <- getTarget
+           case () of
+             _ | t == t'   -> delay 0.25 >> next t
+               | otherwise -> return ()
+
+finishWalkThreshold :: Float
+finishWalkThreshold = 10
+
+-- walk up to given point
+walkTo :: Float -> Vec3 -> AionBot ()
+walkTo maxtime p =
+    finished >>= \f ->
+        case f of
+          True  -> return ()
+          False -> withSpark keepAim $ \_ ->
+                     do sendKey C.Down keyForward
+                        timeout maxtime walk
+                        sendKey C.Up keyForward
+  where
+    walk = finished >>= \f ->
+           case f of
+             True  -> sendKey C.Up keyForward >> debug "TARGET REACHED"
+             False -> delay 0.25 >> walk
+    keepAim = aimPoint p >> delay 2 >> keepAim
+    finished = getPlayer >>= \ply ->
+               let ply_pos = player_pos ply
+                   dist = len $ ply_pos $- p in
+               return $ dist <= finishWalkThreshold
+
+-- walk up to target
+walkToTarget :: Float -> AionBot ()
+walkToTarget maxtime =
+    getTarget >>= walk
+    where walk Nothing = return ()
+          walk (Just t) = walkTo maxtime (entity_pos t)
+
 ----
 ---- Bot state
 ----

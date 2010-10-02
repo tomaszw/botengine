@@ -14,13 +14,12 @@ import AionBot
 import MicroThread
 import Comm
 
-data Cmd = Quit | AimTarget | TargetInfo | PlayerInfo | EntitiesInfo
-
+data Cmd = Quit | NextTarget | AimTarget | WalkTarget | TargetInfo | PlayerInfo | EntitiesInfo | ParkMouse
 
 execCmd cmd = 
     do t0 <- time
        updateState
-       execCmd' cmd
+       withSpark (delay 0.5 >> stateReader 0.5) $ \_ -> execCmd' cmd
        t1 <- time
        liftIO $ putStrLn $ printf "... finished %.2f secs" (t1-t0)
 
@@ -29,7 +28,9 @@ execCmd' AimTarget = aimTarget
 execCmd' PlayerInfo = getPlayer >>= \p -> getPlayerEntity >>= \e -> liftIO $ putStrLn (show p) >> putStrLn (show e)
 execCmd' TargetInfo = getTarget >>= \t -> liftIO $ putStrLn (show t)
 execCmd' EntitiesInfo = getEntities >>= \e -> liftIO $ mapM_ (putStrLn . show) e >> putStrLn ((show $ length e) ++ " entities.")
-
+execCmd' WalkTarget = walkToTarget 10
+execCmd' NextTarget = nextTarget
+execCmd' ParkMouse = parkMouse
 execCmdWithGameWindow c cmd =
     do w <- getForegroundWindow c
        g <- getGameWindow c
@@ -48,6 +49,9 @@ parseCmd cmd =
       ["p"] -> Just PlayerInfo
       ["t"] -> Just TargetInfo
       ["e"] -> Just EntitiesInfo
+      ["wt"] -> Just WalkTarget
+      ["n"] -> Just NextTarget
+      ["park"] -> Just ParkMouse
       _ -> Nothing
 
 runCmdLine :: Channel IO -> IO ()

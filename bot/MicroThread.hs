@@ -2,10 +2,11 @@ module MicroThread ( MicroThreadT
            , MonadMicroThread (..)
            , Request (..)
            , waitCompletion
+           , withSpark
            , runMicroThreadT ) where
 
 import Control.Monad
-import Control.Concurrent hiding (yield)
+import Control.Concurrent hiding (yield, killThread)
 import Control.Monad.Trans
 import Control.Monad.Cont
 import Control.Monad.State
@@ -32,10 +33,13 @@ instance MonadTrans MicroThreadT where
 class (Monad m) => MonadMicroThread m where
     delay :: Float -> m ()
     spark :: m () -> m ThreadID
+    terminate :: ThreadID -> m ()
     wait :: m Bool -> m ()
     time :: m Float
-    timeout :: Float -> m a -> m (Maybe a)
+    timeout :: Float -> m () -> m ()
     invariant :: m Bool -> m () -> m a -> m a
+    finally :: m () -> m a -> m a
+    currentThreadID :: m ThreadID
     isThreadAlive :: ThreadID -> m Bool
 
 instance MonadMicroThread (MicroThreadT m) where
@@ -47,6 +51,10 @@ instance MonadMicroThread (MicroThreadT m) where
            trace $ "sparking " ++ show id
            yield (Spark [newThread id thread])
            return id
+
+    terminate threadID =
+        do trace $ "terminating " ++ show threadID
+           yield $ Kill threadID
 
     wait cond =
         withT (\t -> t { contThreadPred = cond }) $
@@ -62,25 +70,43 @@ instance MonadMicroThread (MicroThreadT m) where
     invariant hold violated f =
         do s <- get 
            let invs = invariants (current s)
-           withT (\t -> t { invariants = (hold,violated):invs }) $
-                 f
+           -- only add it, don't release -> supposed to be done by runtime
+           modifyCurrentT (\t -> t { invariants = (hold,violated):invs })
+           f
+
+    currentThreadID =
+        get >>= \s -> return . threadID . current $ s
 
     time = prompt GetCurrentTime
 
-    -- after max_t passes, returns Nothing, otherwise returns whatever's f returned
+    finally guard f =
+        do r <- withT t' $ f
+           guard
+           return r
+        where t' t = t {
+                       finalisers = guard : (finalisers t)
+                     }
+
     timeout max_t f =
         time >>= run
         where
           run t0 = do
-            callCC $ \exit ->
-                do let testTimeout = time >>= \t -> return $ t - t0 < max_t
-                   invariant testTimeout (exit Nothing) $  -- timeout, return Nothing
-                             f >>= \r -> (exit $ Just r)   -- return the thread result
-                   -- won't ever get here due to exit continuation
-                   error "impossible" >> return Nothing
-                 
+            let testTimeout = time >>= \t -> return $ t - t0 < max_t
+            invariant testTimeout (return ()) f
+
 waitCompletion :: (MonadMicroThread m) => ThreadID -> m ()
 waitCompletion id = wait (isThreadAlive id >>= return . not)
+
+withSpark :: (MonadMicroThread m) => m () -> (ThreadID -> m a) -> m a
+withSpark thread f =
+    do new_id <- spark thread
+       finally (maybe_terminate new_id) $
+               f new_id
+       where
+         maybe_terminate id =
+             do alive <- isThreadAlive id
+                when alive $
+                     terminate id
 
 data Request a where
     GetCurrentTime :: Request Float
@@ -94,19 +120,25 @@ data Thread m = Thread
     , invariants :: [ (MicroThreadT m Bool, MicroThreadT m ()) ] -- hold condition , what to do when violated
     , scheduled :: Float
     , threadID :: ThreadID
+    , finalisers :: [Finaliser m]
     }
+
+type Finaliser m = MicroThreadT m ()
 
 data Yield m = Delay Float
              | Spark [Thread m]
              | SparkAndDie [Thread m]
              | Nop
              | Die
+             | Kill ThreadID
+
 instance Show (Yield m) where
     show (Delay f) = printf "delay %2.4f" f
     show (Spark _) = "spark"
     show (SparkAndDie _) = "spark-and-die"
     show Die = "die"
     show Nop = "nop"
+    show (Kill id) = "kill " ++ show id
 
 data SystemState m = SystemState
     {
@@ -152,10 +184,33 @@ withT mod act =
 newThread :: ThreadID -> MicroThreadT m () -> Thread m
 newThread id thread =
     Thread { contThread = \ _ -> thread
-                , contThreadPred = return True
-                , invariants = []
-                , scheduled = 0
-                , threadID = id }
+           , contThreadPred = return True
+           , invariants = []
+           , scheduled = 0
+           , threadID = id
+           , finalisers = [] }
+
+getThread :: ThreadID -> MicroThreadT m (Thread m)
+getThread id =
+    do s <- get
+       return $ find id (threads s)
+    where
+      find id ts = case filter ( \t -> threadID t == id ) ts of
+                     [ t ] -> t
+                     [ ] -> error $ "no thread of id " ++ show id
+                     _-> error $ "more than one thread with id " ++ show id
+
+
+killThread :: ThreadID -> MicroThreadT m ()
+killThread thread_id =
+    do trace $ "killing " ++ show thread_id
+       thread <- getThread thread_id
+       modify  $ \s -> s { threads = filter p (threads s) }
+       -- execute any finalisers
+       let fs = finalisers thread
+       sequence_ fs
+  where
+    p t = threadID t /= thread_id
 
 trace :: String -> MicroThreadT m ()
 trace msg = prompt (Trace msg)
@@ -201,30 +256,29 @@ runner t0 =
              reschedule thread' yield
       
       exec thread engine = do
+        modify ( \s -> s { current = thread
+                         , jumpout = engine
+                         } )
         pred <- contThreadPred thread
         v <- check_invariants thread
         case (pred,v) of
           (False,[]) -> return Nop  -- current predicate does not hold, don't execute
           (True ,[]) -> -- all is well, execute thread
-               do modify ( \s -> s { current = thread
-                                   , jumpout = engine
-                                   } )
-                  trace $ "executing " ++ show (threadID thread)
+               do trace $ "executing " ++ show (threadID thread)
                   contThread thread ()
                   s <- get
                   trace $ show (threadID $ current s) ++ " finished"
                   -- if we're here that means thread finished it execution gracefully
                   return Die
           (_,viols) -> -- if invariants don't hold, kill the thread and invoke specified actions in NEW threads
-                do trace "invariant violation"
+                do let current_id = threadID thread
+                   trace $ "invariant violation by " ++ show (threadID thread)
+                   -- clear invariants for this thread
+                   replace current_id $ thread { invariants = [] }
+                   -- spark invariant actions
                    id <- pickThreadID
                    let t = newThread id (head viols)
                    return $ SparkAndDie [t]
-
-      kill thread_id =
-          modify $ \s -> s { threads = filter p (threads s) }
-          where
-            p th = threadID th /= thread_id
 
       replace thread_id th' =
           modify $ \s -> s { threads = foldl' f [] (threads s) }
@@ -246,8 +300,10 @@ runner t0 =
           Spark th       -> do add_sparks th
                                replace id $ thread { scheduled = t + quantum_dt }
           SparkAndDie th -> do add_sparks th
-                               kill id
-          Die            -> kill id
+                               killThread id
+          Kill id'       -> do killThread id'
+                               replace id $ thread { scheduled = t + quantum_dt }
+          Die            -> killThread id
 
       check_invariants :: Thread m -> MicroThreadT m [MicroThreadT m ()]
       check_invariants x = do

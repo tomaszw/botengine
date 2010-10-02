@@ -16,7 +16,7 @@ import Process
 
 data Camera = Camera {
       camera_rot :: !Float
-    } deriving (Show)
+    } deriving (Eq, Show)
 
 instance Binary Camera where
     put c =
@@ -32,7 +32,7 @@ data Player = Player {
     , player_level :: !Int
     , player_pos :: !Vec3
     , player_rot :: !Float
-    } deriving (Show)
+    } deriving (Eq, Show)
 
 instance Binary Vec3 where
     put (Vec3 x y z) = put x >> put y >> put z
