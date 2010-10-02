@@ -43,6 +43,7 @@ data Packet = Packet { packet_id :: Integer
 data PacketData = UpdateCamera Camera
                 | UpdatePlayer Player
                 | UpdateEntityList [Entity]
+                | MoveMouse Word32 Word32
 
 instance Binary Packet where
     put p = do put $ packet_id p
@@ -55,6 +56,7 @@ instance Binary PacketData where
     put (UpdateCamera c) = put (0 :: Word8) >> put c
     put (UpdatePlayer p) = put (1 :: Word8) >> put p
     put (UpdateEntityList l) = put (2 :: Word8) >> put l
+    put (MoveMouse dx dy) = put (3 :: Word8) >> put dx >> put dy
     get =
         do t <- get :: Get Word8
            get' t
@@ -62,6 +64,7 @@ instance Binary PacketData where
           get' 0 = get >>= \c -> return $ UpdateCamera c
           get' 1 = get >>= \p -> return $ UpdatePlayer p
           get' 2 = get >>= \l -> return $ UpdateEntityList l
+          get' 3 = do { dx <- get; dy <- get; return $ MoveMouse dx dy }
     
 maxPacketSz :: Int
 maxPacketSz = 32768

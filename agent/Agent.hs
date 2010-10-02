@@ -158,6 +158,25 @@ commandServer p w =
             err c e = putStrLn (show e) >> (E.try (sClose c) :: IO (Either E.SomeException ())) >> disconnect
             disconnect = putStrLn "client disconnected." >> loop sock
 
+handlePacket :: Packet -> IO ()
+handlePacket p =
+    case packet_data p of
+      MoveMouse dx dy -> c_mouse_move (fromIntegral dx) (fromIntegral dy)
+      _ -> return ()
+
+serviceSocket :: Socket -> IO ()
+serviceSocket sock =
+    do packets <- receivePackets sock
+       mapM_ (handlePacket) packets
+       serviceSocket sock
+
+runUdpServer ::IO ()
+runUdpServer =
+    do recvSock <- socket AF_INET Datagram defaultProtocol
+       bindSocket recvSock (SockAddrInet port iNADDR_ANY)
+       forkIO $ serviceSocket recvSock
+       return ()
+
 windowName = "AION Client"
 
 main :: IO ()
@@ -166,5 +185,6 @@ main = do hSetBuffering stdout LineBuffering
           w <- withCString windowName $ \s -> c_find_window s
           withSocketsDo $ do
             forkIO $ runStateSender p 20
+            forkIO $ runUdpServer
             commandServer p w
           return ()

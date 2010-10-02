@@ -91,8 +91,10 @@ instance MonadMicroThread (MicroThreadT m) where
         time >>= run
         where
           run t0 = do
-            let testTimeout = time >>= \t -> return $ t - t0 < max_t
-            invariant testTimeout (return ()) f
+            id <- spark $ do
+                     let testTimeout = time >>= \t -> return $ t - t0 < max_t
+                     invariant testTimeout (return ()) f
+            waitCompletion id
 
 waitCompletion :: (MonadMicroThread m) => ThreadID -> m ()
 waitCompletion id = wait (isThreadAlive id >>= return . not)

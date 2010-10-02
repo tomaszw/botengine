@@ -19,7 +19,10 @@ module AionBot ( AionBot, runAionBot
 import Data.List
 import Data.Ord
 import Data.IORef
+import Data.Binary ( encode )
 import Data.Map (Map)
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString as B
 import qualified Data.Map as M
 import Control.Concurrent
 import Control.Monad
@@ -28,6 +31,8 @@ import Control.Monad.Trans
 import System.Time
 import System.IO
 import Text.Printf
+import Network.Socket hiding (sendTo, recvFrom)
+import Network.Socket.ByteString (sendTo, recvFrom)
 
 import GameState
 import MicroThread
@@ -36,6 +41,8 @@ import Comm ( Channel )
 import qualified Comm as C
 import Math
 import Keys
+
+import Packet
 
 newtype AionBot a = AionBot { unBot :: MicroThreadT (StateT BotState IO) a }
     deriving ( Monad, MonadMicroThread )
@@ -60,6 +67,16 @@ sendKeyPress code = getChannel >>= \c -> liftIO $ C.sendKeyPress c code
 sendMouseBtn state btn = getChannel >>= \c -> liftIO $ C.sendMouseBtn c state btn
 sendMouseClick btn = getChannel >>= \c -> liftIO $ C.sendMouseClick c btn
 sendMouseMove dx dy = getChannel >>= \c -> liftIO $ C.sendMouseMove c dx dy
+
+-- udp send mouse move
+sendMouseMoveFast dx dy =
+    do s <- liftState get
+       let udps = udpsock s
+           addr = udpaddr s
+           p = Packet { packet_id = 0
+                      , packet_addr = Nothing
+                      , packet_data = MoveMouse (fromIntegral dx) (fromIntegral dy) }
+       liftIO $ sendTo udps (B.concat . BL.toChunks $ encode p) addr
 
 ----
 ---- Control Commands
@@ -113,14 +130,20 @@ rotateCamera delta =
       rotate r0 t_r
           | abs (t_r - r0) < epsilon = return () -- hooray rotated
           | otherwise =
-              do let dr = abs $ t_r - r0
-                     speed = max 2 $ (dr/5) ** 1.5 -- nice smooth function for rotation speed; lower when nearing target rotation
-                     dx | t_r > r0 = (-speed)
-                        | otherwise = speed
-                 -- debug $ printf "tr=%f r=%f dx=%f" t_r r0 dx
-                 sendMouseMove (round dx) 0
+              do let diff_a = max t_r r0 - min t_r r0
+                     diff_b = 360 - diff_a
+                     d =
+                         case () of
+                           _ | r0 >= t_r, diff_a <= diff_b -> -diff_a
+                             | r0 >= t_r, diff_a >  diff_b ->  diff_b
+                             | r0 <  t_r, diff_a <= diff_b ->  diff_a
+                             | otherwise                   -> -diff_b
+                     speed = min 20 . max 2 $ (abs d / 5) ** 1.5 -- nice smooth function for rotation speed; lower when nearing target rotation
+                     dx = speed * (- (signum d))
+                 -- debug $ printf "tr=%f r=%f dx=%f d=%f" t_r r0 dx d
+                 sendMouseMoveFast (round dx) 0
                  -- delay and fetch new camera orientation from game, then continue with rotation
-                 delay 0.01
+                 delay 0.1
                  c <- getCamera
                  rotate (camera_rot c) t_r
     
@@ -174,16 +197,17 @@ walkTo maxtime p =
     finished >>= \f ->
         case f of
           True  -> return ()
-          False -> withSpark keepAim $ \_ ->
-                     do sendKey C.Down keyForward
-                        timeout maxtime walk
-                        sendKey C.Up keyForward
+          False -> do aimPoint p
+                      withSpark keepAim $ \_ ->
+                          do sendKey C.Down keyForward
+                             timeout maxtime walk
+                             sendKey C.Up keyForward
   where
     walk = finished >>= \f ->
            case f of
              True  -> sendKey C.Up keyForward >> debug "TARGET REACHED"
              False -> delay 0.25 >> walk
-    keepAim = aimPoint p >> delay 2 >> keepAim
+    keepAim = aimPoint p >> keepAim
     finished = getPlayer >>= \ply ->
                let ply_pos = player_pos ply
                    dist = len $ ply_pos $- p in
@@ -200,6 +224,8 @@ walkToTarget maxtime =
 ---- Bot state
 ----
 data BotState = BotState { channel   :: Channel IO
+                         , udpsock   :: Socket
+                         , udpaddr   :: SockAddr
                          , camera    :: Camera
                          , player    :: Player
                          , entities  :: [Entity]
@@ -270,16 +296,22 @@ stateReader gs period =
 
 runAionBot :: Channel IO -> AionBot () -> IO ()
 runAionBot c aionbot =
-    do t0 <- getClockTime
+    do udp <- socket AF_INET Datagram defaultProtocol
+       a <- inet_addr "192.168.1.2"
+       let addr = SockAddrInet 5555 a
+       t0 <- getClockTime
        let mt = unBot aionbot
            state = runMicroThreadT (handler t0) mt
-       evalStateT state s0
+       evalStateT state (s0 udp addr)
   where
-    s0 = BotState { channel = c
+    s0 udp addr =
+         BotState { channel = c
                   , camera = undefined
                   , player = undefined
                   , entities = undefined
-                  , entity_map = undefined }
+                  , entity_map = undefined
+                  , udpsock = udp
+                  , udpaddr = addr }
 
     handler :: ClockTime -> Request a -> StateT BotState IO a
     handler t0 (ThreadDelay secs) = liftIO . threadDelay $ round (secs * 10^6)

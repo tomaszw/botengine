@@ -24,6 +24,6 @@ Executable agent
   if os(windows) {
     Build-Depends: Win32
   }
-    
+  GHC-Options: -threaded  
   C-Sources: cbits/process-helper.c cbits/input-helper.c
   Extra-Libraries: psapi

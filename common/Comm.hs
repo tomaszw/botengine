@@ -236,4 +236,3 @@ sendMouseMove c dx dy =
     do channSendBinary c $ commCode SendMouseMove
        channSendBinary c dx
        channSendBinary c dy
-
