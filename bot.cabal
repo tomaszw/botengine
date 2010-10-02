@@ -1,0 +1,42 @@
+Name: bot
+Version: 0.0
+Author: Tomasz Wroblewski
+Build-Type: Simple
+Cabal-Version: >= 1.2
+
+Executable bot
+  Main-is: Main.hs             
+  Extensions: GeneralizedNewtypeDeriving, GADTs, ExistentialQuantification, MultiParamTypeClasses, RankNTypes, PatternGuards, ForeignFunctionInterface, FlexibleContexts,FlexibleInstances
+  Build-Depends:
+        base >= 3 && < 5,
+        mtl,
+        old-time,
+        binary,
+        data-binary-ieee754,
+        containers,
+        split,
+        bytestring,
+        utf8-string,
+        network,
+        network-bytestring,
+        MonadPrompt
+
+Executable proreader
+  Main-is: ProReader.hs
+  Extensions: GeneralizedNewtypeDeriving, GADTs, ExistentialQuantification, MultiParamTypeClasses, RankNTypes, PatternGuards, ForeignFunctionInterface, FlexibleContexts,FlexibleInstances
+  Build-Depends:
+        base >= 3 && < 5,
+        mtl,
+        old-time,
+        binary,
+        data-binary-ieee754,
+        containers,
+        split,
+        bytestring,
+        utf8-string,
+        network,
+        network-bytestring,
+        MonadPrompt,
+        Win32
+  C-Sources: cbits/process-helper.c cbits/input-helper.c
+  Extra-Libraries: psapi  

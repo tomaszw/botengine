@@ -1,0 +1,229 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving, GADTs, ExistentialQuantification, MultiParamTypeClasses, RankNTypes #-}
+module AionBot ( AionBot, runAionBot, runTheBot
+               , updateState
+               , getPlayer
+               , getPlayerEntity
+               , getTarget
+               , getEntities
+               , aimTarget
+               ) where
+
+import Data.List
+import Data.Ord
+import Data.Map (Map)
+import qualified Data.Map as M
+import Control.Concurrent
+import Control.Monad
+import Control.Monad.State
+import Control.Monad.Trans
+import System.Time
+import System.IO
+import Text.Printf
+
+import MicroThread
+import Aion
+import Comm ( Channel )
+import qualified Comm as C
+import Math
+
+newtype AionBot a = AionBot { unBot :: MicroThreadT (StateT BotState IO) a }
+    deriving ( Monad, MonadMicroThread )
+
+instance MonadIO AionBot where
+    liftIO = AionBot . lift . lift
+
+liftState = AionBot . lift
+
+getChannel :: AionBot (Channel IO)
+getChannel =
+    do s <- liftState get
+       return $ channel s
+
+
+----
+---- Wrappers around some comm channel functions so we don't have to pass channel everywhere
+----
+setMousePos x y = getChannel >>= \c -> liftIO $ C.setMousePos c x y
+sendKey state code = getChannel >>= \c -> liftIO $ C.sendKey c state code
+sendKeyPress code = getChannel >>= \c -> liftIO $ C.sendKeyPress c code
+sendMouseBtn state btn = getChannel >>= \c -> liftIO $ C.sendMouseBtn c state btn
+sendMouseClick btn = getChannel >>= \c -> liftIO $ C.sendMouseClick c btn
+sendMouseMove dx dy = getChannel >>= \c -> liftIO $ C.sendMouseMove c dx dy
+
+----
+---- Control Commands
+----
+
+-- place mouse in safe spot for performing clicks (no mobs, no ui elements)
+parkMouse :: AionBot ()
+parkMouse = centerMouse -- setMousePos 0.33 0.1 >> delay 0.1
+
+centerMouse :: AionBot ()
+centerMouse = setMousePos 0.5 0.5 >> delay 0.1
+
+-- camera rotation value best matching a direction
+rotationOfDir :: Vec3 -> Float
+rotationOfDir (Vec3 x y z) =
+    let rad = fst $ minimumBy (comparing snd) (zip angles diffs)
+        deg = rad2deg rad in
+    snap (180-deg) -- some weird aioness
+    where
+      angles  = map deg2rad [ 0..360 ]
+      diffs   = map diff angles
+      diff a  = let x' = cos a
+                    y' = sin a
+                in abs(x-x') + abs(y-y')
+      deg2rad a = a / 360 * 2 * pi
+      rad2deg a = a * 360 / 2 / pi
+
+-- angle snapping to -180 .. 180 range
+snap :: Float -> Float
+snap a | a >= 180    = snap (a-360)
+       | a <  (-180) = snap (a+360)
+       | otherwise   = a
+
+-- rotate camera by given amount
+rotateCamera :: Float -> AionBot ()
+rotateCamera delta =
+    -- shouldn't be taking more than few secs
+    do timeout 2.0 $
+               do parkMouse
+                  sendMouseBtn C.Down C.R
+                  delay 0.05
+                  c <- getChannel >>= \ch -> liftIO $ getCamera ch
+                  -- target rotation angle
+                  let t_r = snap $ camera_rot c + delta
+                  rotate (camera_rot c) t_r
+       sendMouseBtn C.Up C.R
+       delay 0.05
+       return ()
+    where
+      epsilon = 2
+      rotate r0 t_r
+          | abs (t_r - r0) < epsilon = return () -- hooray rotated
+          | otherwise =
+              do let dr = abs $ t_r - r0
+                     speed = max 2 $ (dr/5) ** 1.5 -- nice smooth function for rotation speed; lower when nearing target rotation
+                     dx | t_r > r0 = (-speed)
+                        | otherwise = speed
+                 -- debug $ printf "tr=%f r=%f dx=%f" t_r r0 dx
+                 sendMouseMove (round dx) 0
+                 -- delay and fetch new camera orientation from game, then continue with rotation
+                 delay 0.01
+                 c <- getChannel >>= \ch -> liftIO $ getCamera ch
+                 rotate (camera_rot c) t_r
+    
+-- aim given direction
+aimDirection :: Vec3 -> AionBot ()
+aimDirection d =
+    do p <- getPlayer
+       let r = rotationOfDir d
+           r_diff = r - player_rot p
+       rotateCamera r_diff
+
+-- aim given point
+aimPoint :: Vec3 -> AionBot ()
+aimPoint p =
+    do ply <- getPlayer
+       let dir = norm $ (p $- player_pos ply)
+       aimDirection dir
+
+-- aim specified entity
+aimEntity :: Entity -> AionBot ()
+aimEntity e = aimPoint (entity_pos e)
+
+-- aim current target
+aimTarget :: AionBot ()
+aimTarget =
+    do t <- getTarget
+       case t of
+         Nothing -> return ()
+         Just t  -> aimEntity t
+----
+---- Bot state
+----
+data BotState = BotState { channel   :: Channel IO
+                         , player    :: Player
+                         , entities  :: [Entity]
+                         , entity_map :: Map Int Entity }
+
+-- fetch complete state from game
+updateState :: AionBot ()
+updateState =
+    do c <- getChannel
+       p <- liftIO $ getPlayerData c
+       e <- liftIO $ getEntityList c
+       let e_map = M.fromList $ zip (map entity_id e) e
+       liftState . modify $ \s -> s { player = p, entities = e, entity_map = e_map }
+
+-- access player
+getPlayer :: AionBot Player
+getPlayer = liftState get >>= return . player
+
+-- access player as entity
+getPlayerEntity :: AionBot Entity
+getPlayerEntity = getPlayer >>= \p ->
+                  getEntity (player_id p) >>= \e ->
+                  case e of
+                    Nothing -> error "There is no player entity!"
+                    Just e -> return e
+
+-- access entity by ID
+getEntity :: Int -> AionBot (Maybe Entity)
+getEntity id = liftState get >>= \s -> return $ M.lookup id (entity_map s)
+
+-- access current entity list
+getEntities :: AionBot [Entity]
+getEntities = liftState get >>= return . entities
+
+-- access current player target
+getTarget :: AionBot (Maybe Entity)
+getTarget = getPlayerEntity >>= \p -> getEntity (entity_target_id p)
+
+theBot :: AionBot ()
+theBot = spark (stateReader 0.5) >> idle
+
+idle :: AionBot ()
+idle =
+    do delay 0.25
+       liftIO $ putStrLn "ha, ha" >> hFlush stdout
+       idle
+
+-- periodically read complete state from the game and update stored entities
+stateReader :: Float -> AionBot ()
+stateReader period =
+    updateState >> delay period >> stateReader period
+
+runAionBot :: Channel IO -> AionBot () -> IO ()
+runAionBot c aionbot =
+    do t0 <- getClockTime
+       let mt = unBot aionbot
+           state = runMicroThreadT (handler t0) mt
+       evalStateT state s0
+  where
+    s0 = BotState { channel = c
+                  , player = undefined
+                  , entities = undefined
+                  , entity_map = undefined }
+
+    handler :: ClockTime -> Request a -> StateT BotState IO a
+    handler t0 (ThreadDelay secs) = liftIO . threadDelay $ round (secs * 10^6)
+    handler t0 GetCurrentTime = liftIO $ diffTime t0
+    --handler t0 (Trace msg) = return ()
+    handler t0 (Trace msg) = liftIO . putStrLn $ "thread> " ++ msg
+
+    diffTime :: ClockTime -> IO Float
+    diffTime t0 =
+        do t1 <- getClockTime
+           let diff = diffClockTimes t1 t0
+           return $     (fromIntegral (tdHour diff) * 60 * 24)
+                      + (fromIntegral (tdMin diff) * 60)
+                      + (fromIntegral $ tdSec diff)
+                      + (fromIntegral (tdPicosec diff) / 10^12)
+
+runTheBot :: Channel IO -> IO ()
+runTheBot channel = runAionBot channel theBot
+
+debug :: String -> AionBot ()
+debug s = liftIO (putStrLn s)
+
