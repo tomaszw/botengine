@@ -12,7 +12,7 @@ module AionBot ( AionBot, runAionBot, runTheBot
                , aimTarget
                , nextTarget
                , walkToTarget
-               
+               , rotateCamera
                ) where
 
 import Data.List
@@ -67,7 +67,7 @@ parkMouse :: AionBot ()
 parkMouse = centerMouse -- setMousePos 0.33 0.1 >> delay 0.1
 
 centerMouse :: AionBot ()
-centerMouse = setMousePos 0.5 0.5 >> delay 0.1
+centerMouse = setMousePos 50 50 >> delay 0.1
 
 -- camera rotation value best matching a direction
 rotationOfDir :: Vec3 -> Float

@@ -15,6 +15,7 @@ import MicroThread
 import Comm
 
 data Cmd = Quit | NextTarget | AimTarget | WalkTarget | TargetInfo | PlayerInfo | EntitiesInfo | ParkMouse
+         | Rotate Float
 
 execCmd cmd = 
     do t0 <- time
@@ -31,6 +32,8 @@ execCmd' EntitiesInfo = getEntities >>= \e -> liftIO $ mapM_ (putStrLn . show) e
 execCmd' WalkTarget = walkToTarget 10
 execCmd' NextTarget = nextTarget
 execCmd' ParkMouse = parkMouse
+execCmd' (Rotate a) = rotateCamera a
+
 execCmdWithGameWindow c cmd =
     do w <- getForegroundWindow c
        g <- getGameWindow c
@@ -52,6 +55,11 @@ parseCmd cmd =
       ["wt"] -> Just WalkTarget
       ["n"] -> Just NextTarget
       ["park"] -> Just ParkMouse
+      ["rot", v] ->
+          case reads v of
+            [(f,_)] -> Just $ Rotate f
+            _ -> Nothing
+
       _ -> Nothing
 
 runCmdLine :: Channel IO -> IO ()

@@ -203,8 +203,8 @@ readProcessMemory c offset len =
 
 setMousePos :: (Monad m) => Channel m -> Float -> Float -> m ()
 setMousePos c x y =
-    let x' = round $ x * 100 :: Word32
-        y' = round $ y * 100 :: Word32 in
+    let x' = (round $ x * 100) :: Word32
+        y' = (round $ y * 100) :: Word32 in
     do channSendBinary c $ commCode SetMousePos
        channSendBinary c x'
        channSendBinary c y'
