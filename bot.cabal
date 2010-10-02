@@ -5,6 +5,7 @@ Build-Type: Simple
 Cabal-Version: >= 1.2
 
 Executable bot
+  hs-source-dirs: common bot
   Main-is: Main.hs             
   Extensions: GeneralizedNewtypeDeriving, GADTs, ExistentialQuantification, MultiParamTypeClasses, RankNTypes, PatternGuards, ForeignFunctionInterface, FlexibleContexts,FlexibleInstances
   Build-Depends:
@@ -21,8 +22,13 @@ Executable bot
         network-bytestring,
         MonadPrompt
 
-Executable proreader
-  Main-is: ProReader.hs
+Executable agent
+  if os(windows)
+    buildable: True
+  else       
+    buildable: False
+  hs-source-dirs: common agent
+  Main-is: Agent.hs
   Extensions: GeneralizedNewtypeDeriving, GADTs, ExistentialQuantification, MultiParamTypeClasses, RankNTypes, PatternGuards, ForeignFunctionInterface, FlexibleContexts,FlexibleInstances
   Build-Depends:
         base >= 3 && < 5,
@@ -39,4 +45,4 @@ Executable proreader
         MonadPrompt,
         Win32
   C-Sources: cbits/process-helper.c cbits/input-helper.c
-  Extra-Libraries: psapi  
+  Extra-Libraries: psapi
