@@ -1,18 +1,25 @@
 module Main where
 
-import BotClient
-import CmdLine
+import Control.Concurrent
 import System.IO
 import System.Environment
+
+import GameState
+import BotService
+import CmdLine
+
 
 main =
     do hSetBuffering stdout LineBuffering
        args <- getArgs
        case args of
          [ addr ] -> do
-                   putStrLn "connecting.."
-                   c <- connectBot addr
+                   putStrLn "connecting to agent.."
+                   c <- connectAgent addr
                    putStrLn "connected."
-                   runCmdLine c
+                   gs <- newGameState
+                   -- fork the state updater
+                   forkIO $ runGameUpdater gs
+                   runCmdLine gs c
          _ ->
              hPutStrLn stderr "bad args"

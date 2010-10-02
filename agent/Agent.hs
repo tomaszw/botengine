@@ -1,11 +1,14 @@
 module Main where
 
 import Control.Applicative
+import Control.Concurrent
 import Control.Monad
 import Control.Monad.Trans
 import qualified Control.Exception as E
-import qualified Data.ByteString.Lazy as B
-import Network.Socket
+import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
+import Network.Socket hiding ( recvFrom, sendTo )
+import Network.Socket.ByteString ( recvFrom, sendTo )
 import System.IO
 import Data.Binary
 import Foreign.C.String
@@ -18,6 +21,7 @@ import Comm
 import Aion
 import Process
 import WinProcess
+import Packet
 
 foreign import ccall "find_window" c_find_window :: CString -> IO HWND
 foreign import ccall "mouse_set_cursor_pos_perc" c_mouse_set_cursor_pos_perc :: HWND -> CDouble -> CDouble -> IO ()
@@ -30,8 +34,8 @@ foreign import stdcall "SetForegroundWindow" winsetForegroundWindow :: HWND -> I
 
 port = 5555
 
-len32 :: B.ByteString -> Word32
-len32 s = fromIntegral (B.length s)
+len32 :: BL.ByteString -> Word32
+len32 s = fromIntegral (BL.length s)
 
 ptrToWord32 :: Ptr a -> Word32
 ptrToWord32 p = fromIntegral $ p `minusPtr` nullPtr
@@ -99,9 +103,46 @@ conversation p hwnd c =
                               channSendA c ent
 
       handle c = error $ "unknown command " ++ show c
+
+mkCameraPacket :: Counter -> WinProcess -> IO Packet
+mkCameraPacket c proc =
+    getCamera proc >>= \cam -> newPacketUsingCounter c (UpdateCamera cam)
+
+mkPlayerPacket :: Counter -> WinProcess -> IO Packet
+mkPlayerPacket c proc =
+    getPlayerData proc >>= \ply -> newPacketUsingCounter c (UpdatePlayer ply)
+
+mkEntitiesPacket :: Counter -> WinProcess -> IO Packet
+mkEntitiesPacket c proc =
+    getEntityList proc >>= \ents -> newPacketUsingCounter c (UpdateEntityList ents)
     
-server :: WinProcess -> HWND -> IO ()
-server p w =
+runStateSender :: WinProcess -> Int -> IO ()
+runStateSender p delay_ms =
+    do sock <- socket AF_INET Datagram defaultProtocol
+       a <- inet_addr "192.168.1.5"
+       let addr = SockAddrInet 5555 a
+       cnt_cam <- newCounter
+       cnt_ply <- newCounter
+       cnt_ent <- newCounter
+       updates sock addr cnt_cam cnt_ply cnt_ent 0
+    where
+      updates sock addr cnt_cam cnt_ply cnt_ent i =
+          do cam <- encode <$> mkCameraPacket cnt_cam p
+             sendTo sock (conv cam) addr
+             when big $
+                  do ply  <- encode <$> mkPlayerPacket cnt_ply p
+                     ents <- encode <$> mkEntitiesPacket cnt_ent p
+                     sendTo sock (conv ply) addr
+                     sendTo sock (conv ents) addr
+                     return ()
+             threadDelay $ delay_ms * 1000
+             updates sock addr cnt_cam cnt_ply cnt_ent (i+1)
+          where
+            big = i `mod` 10 == 0
+            conv s = B.concat . BL.toChunks $ s
+
+commandServer :: WinProcess -> HWND -> IO ()
+commandServer p w =
     do sock <- socket AF_INET Stream defaultProtocol
        bindSocket sock (SockAddrInet port iNADDR_ANY)
        listen sock 1
@@ -123,5 +164,7 @@ main :: IO ()
 main = do hSetBuffering stdout LineBuffering
           p <- openGameProcess windowName
           w <- withCString windowName $ \s -> c_find_window s
-          withSocketsDo (server p w)
+          withSocketsDo $ do
+            forkIO $ runStateSender p 20
+            commandServer p w
           return ()

@@ -13,14 +13,16 @@ import System.IO
 import AionBot
 import MicroThread
 import Comm
+import GameState
 
 data Cmd = Quit | NextTarget | AimTarget | WalkTarget | TargetInfo | PlayerInfo | EntitiesInfo | ParkMouse
          | Rotate Float
 
-execCmd cmd = 
+execCmd :: GameState -> Cmd -> AionBot ()
+execCmd gs cmd = 
     do t0 <- time
-       updateState
-       withSpark (delay 0.5 >> stateReader 0.5) $ \_ -> execCmd' cmd
+       updateState gs
+       withSpark (delay 0.01 >> stateReader gs 0.01) $ \_ -> execCmd' cmd
        t1 <- time
        liftIO $ putStrLn $ printf "... finished %.2f secs" (t1-t0)
 
@@ -34,12 +36,12 @@ execCmd' NextTarget = nextTarget
 execCmd' ParkMouse = parkMouse
 execCmd' (Rotate a) = rotateCamera a
 
-execCmdWithGameWindow c cmd =
+execCmdWithGameWindow c gs cmd =
     do w <- getForegroundWindow c
        g <- getGameWindow c
        setForegroundWindow c g
        threadDelay (10^5 * 1)
-       runAionBot c $ execCmd cmd
+       runAionBot c $ execCmd gs cmd
        threadDelay (10^5 * 1)
        setForegroundWindow c w
 
@@ -62,15 +64,15 @@ parseCmd cmd =
 
       _ -> Nothing
 
-runCmdLine :: Channel IO -> IO ()
-runCmdLine c =
+runCmdLine :: GameState -> Channel IO -> IO ()
+runCmdLine gs c =
     do putStr ">> "
        hFlush stdout
        cmd <- parseCmd <$> getLine
        case cmd of
-         Nothing   -> putStrLn "invalid command." >> hFlush stdout >> runCmdLine c
+         Nothing   -> putStrLn "invalid command." >> hFlush stdout >> runCmdLine gs c
          Just Quit -> return ()
-         Just PlayerInfo -> runAionBot c (execCmd PlayerInfo) >> runCmdLine c
-         Just TargetInfo -> runAionBot c (execCmd TargetInfo) >> runCmdLine c
-         Just EntitiesInfo -> runAionBot c (execCmd EntitiesInfo) >> runCmdLine c
-         Just cmd -> execCmdWithGameWindow c cmd >> runCmdLine c
+         Just PlayerInfo -> runAionBot c (execCmd gs PlayerInfo) >> runCmdLine gs c
+         Just TargetInfo -> runAionBot c (execCmd gs TargetInfo) >> runCmdLine gs c
+         Just EntitiesInfo -> runAionBot c (execCmd gs EntitiesInfo) >> runCmdLine gs c
+         Just cmd -> execCmdWithGameWindow c gs cmd >> runCmdLine gs c

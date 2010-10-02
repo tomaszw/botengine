@@ -1,6 +1,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving, GADTs, ExistentialQuantification, MultiParamTypeClasses, RankNTypes #-}
-module AionBot ( AionBot, runAionBot, runTheBot
+module AionBot ( AionBot, runAionBot
                , updateState
+               , updateStateFromChannel
                , stateReader
 
                , parkMouse
@@ -17,6 +18,7 @@ module AionBot ( AionBot, runAionBot, runTheBot
 
 import Data.List
 import Data.Ord
+import Data.IORef
 import Data.Map (Map)
 import qualified Data.Map as M
 import Control.Concurrent
@@ -27,8 +29,9 @@ import System.Time
 import System.IO
 import Text.Printf
 
+import GameState
 import MicroThread
-import Aion
+import Aion hiding (getCamera)
 import Comm ( Channel )
 import qualified Comm as C
 import Math
@@ -99,7 +102,7 @@ rotateCamera delta =
                   sendMouseBtn C.Down C.R
                   finally (sendMouseBtn C.Up C.R) $ do
                     delay 0.05
-                    c <- getChannel >>= \ch -> liftIO $ C.recvCamera ch
+                    c <- getCamera
                     -- target rotation angle
                     let t_r = snap $ camera_rot c + delta
                     rotate (camera_rot c) t_r
@@ -118,7 +121,7 @@ rotateCamera delta =
                  sendMouseMove (round dx) 0
                  -- delay and fetch new camera orientation from game, then continue with rotation
                  delay 0.01
-                 c <- getChannel >>= \ch -> liftIO $ C.recvCamera ch
+                 c <- getCamera
                  rotate (camera_rot c) t_r
     
 -- aim given direction
@@ -197,18 +200,35 @@ walkToTarget maxtime =
 ---- Bot state
 ----
 data BotState = BotState { channel   :: Channel IO
+                         , camera    :: Camera
                          , player    :: Player
                          , entities  :: [Entity]
                          , entity_map :: Map Int Entity }
 
 -- fetch complete state from game
-updateState :: AionBot ()
-updateState =
+updateStateFromChannel :: AionBot ()
+updateStateFromChannel =
     do c <- getChannel
        p <- liftIO $ C.recvPlayer c
        e <- liftIO $ C.recvEntityList c
        let e_map = M.fromList $ zip (map entity_id e) e
        liftState . modify $ \s -> s { player = p, entities = e, entity_map = e_map }
+
+-- fetch complete state from game
+updateState :: GameState -> AionBot ()
+updateState gs =
+    do cam <- liftIO $ readIORef (game_camera gs)
+       ply <- liftIO $ readIORef (game_player gs)
+       ent <- liftIO $ readIORef (game_entities gs)
+       entm <- liftIO $ readIORef (game_entity_map gs)
+       liftState . modify $ \s -> s { camera = cam
+                                    , player = ply
+                                    , entities = ent
+                                    , entity_map = entm }
+
+-- access camera
+getCamera :: AionBot Camera
+getCamera = liftState get >>= return . camera
 
 -- access player
 getPlayer :: AionBot Player
@@ -234,8 +254,8 @@ getEntities = liftState get >>= return . entities
 getTarget :: AionBot (Maybe Entity)
 getTarget = getPlayerEntity >>= \p -> getEntity (entity_target_id p)
 
-theBot :: AionBot ()
-theBot = spark (stateReader 0.5) >> idle
+--theBot :: AionBot ()
+--theBot = spark (stateReader 0.5) >> idle
 
 idle :: AionBot ()
 idle =
@@ -243,10 +263,10 @@ idle =
        liftIO $ putStrLn "ha, ha" >> hFlush stdout
        idle
 
--- periodically read complete state from the game and update stored entities
-stateReader :: Float -> AionBot ()
-stateReader period =
-    updateState >> delay period >> stateReader period
+-- periodically read state from GameState object
+stateReader :: GameState -> Float -> AionBot ()
+stateReader gs period =
+    updateState gs >> delay period >> stateReader gs period
 
 runAionBot :: Channel IO -> AionBot () -> IO ()
 runAionBot c aionbot =
@@ -256,6 +276,7 @@ runAionBot c aionbot =
        evalStateT state s0
   where
     s0 = BotState { channel = c
+                  , camera = undefined
                   , player = undefined
                   , entities = undefined
                   , entity_map = undefined }
@@ -275,8 +296,8 @@ runAionBot c aionbot =
                       + (fromIntegral $ tdSec diff)
                       + (fromIntegral (tdPicosec diff) / 10^12)
 
-runTheBot :: Channel IO -> IO ()
-runTheBot channel = runAionBot channel theBot
+--runTheBot :: Channel IO -> IO ()
+--runTheBot channel = runAionBot channel theBot
 
 debug :: String -> AionBot ()
 debug s = liftIO (putStrLn s)
