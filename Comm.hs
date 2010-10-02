@@ -1,5 +1,5 @@
 module Comm ( Channel
-            , KeyState(..), Button(..)
+            , KeyState(..), Button(..), KeyCode
             , Command (..), commCode, commFromCode
             , channelFromSocket
             , getModuleHandle
@@ -9,8 +9,9 @@ module Comm ( Channel
             , readProcessMemory
             , setMousePos
             , sendKey, sendKeyPress, sendMouseBtn, sendMouseClick, sendMouseMove
+            , channSendA
+            , channRecvA
             , channSendBinary
-            , channRecvBinary
             , channRecvBinary'
             , recvPlayer
             , recvEntityList
@@ -31,9 +32,12 @@ import Control.Monad
 import Control.Monad.Trans
 import Control.Applicative
 import qualified Data.ByteString.Lazy.UTF8 as UTF8
-import Data.Binary ( Binary(..), encode, decode )
+import Data.Binary ( Binary(..), Get(..), Put(..), encode, decode )
 import Foreign.Storable
 import Foreign.C.Types
+
+import Debug.Trace
+import System.IO.Unsafe
 
 import Aion
 import Process
@@ -86,45 +90,48 @@ recvCamera :: (Monad m) => Channel m -> m Camera
 recvCamera c =
     do channSendBinary c $ commCode GetCamera
        len <- channRecvBinary c
-       channRecvBinary' c (len :: Int)
+       channRecvBinary' c (fromIntegral (len::Word32))
 
 recvPlayer :: (Monad m) => Channel m -> m Player
 recvPlayer c =
     do channSendBinary c $ commCode GetPlayer
        len <- channRecvBinary c
-       channRecvBinary' c (len :: Int)
+       channRecvBinary' c (fromIntegral (len::Word32))
 
 recvEntityList :: (Monad m) => Channel m -> m [Entity]
 recvEntityList c =
     do channSendBinary c $ commCode GetEntityList
        count <- channRecvBinary c
-       aux (count :: Int)
+       aux (fromIntegral (count::Word32))
     where
       aux 0 = return []
       aux n =
           do len <- channRecvBinary c
-             e <- channRecvBinary' c (len :: Int)
+             e <- channRecvBinary' c (fromIntegral (len::Word32))
              es <- aux (n-1)
              return $ e:es
 
 data KeyState = Up | Down
 data Button = L | R
-type KeyCode = Int
+type KeyCode = Word32
 
-keyEvCode :: KeyState -> Word8
-keyEvCode Down = 0
-keyEvCode Up = 1
+instance Binary KeyState where
+    put Up = put (0 :: Word8)
+    put Down = put (1 :: Word8)
+    get = do c <- get :: Get Word8
+             case c of { 0 -> return Up; 1 -> return Down }
 
-mouseEvCode :: (KeyState,Button) -> Word8
-mouseEvCode (Down, L) = 0
-mouseEvCode (Up  , L) = 1
-mouseEvCode (Down, R) = 2
-mouseEvCode (Up  , R) = 3
+instance Binary Button where
+    put L = put (0 :: Word8)
+    put R = put (1 :: Word8)
+    get = do c <- get :: Get Word8
+             case c of { 0 -> return L; 1 -> return R }
 
 data Command = GetModuleHandle
          | ReadProcessMemory
          | SendKey
          | SendMouse
+         | SendMouseMove
          | SetMousePos
          | GetForegroundWindow
          | SetForegroundWindow
@@ -132,6 +139,7 @@ data Command = GetModuleHandle
          | GetCamera
          | GetPlayer
          | GetEntityList
+           deriving (Eq, Show)
 
 commCode :: Command -> Word8
 commCode GetModuleHandle = 1
@@ -145,6 +153,7 @@ commCode GetGameWindow = 9
 commCode GetCamera = 10
 commCode GetPlayer = 11
 commCode GetEntityList = 12
+commCode SendMouseMove = 13
 
 commFromCode :: Word8 -> Command
 commFromCode 1 = GetModuleHandle
@@ -158,6 +167,7 @@ commFromCode 9 = GetGameWindow
 commFromCode 10 = GetCamera
 commFromCode 11 = GetPlayer
 commFromCode 12 = GetEntityList
+commFromCode 13 = SendMouseMove
 
 sendString :: (Monad m) => Channel m -> String -> m ()
 sendString c s =
@@ -195,8 +205,8 @@ readProcessMemory c offset len =
 
 setMousePos :: (Monad m) => Channel m -> Float -> Float -> m ()
 setMousePos c x y =
-    let x' = round (x*100) :: Word32
-        y' = round (y*100) :: Word32 in
+    let x' = round $ x * 100 :: Word32
+        y' = round $ y * 100 :: Word32 in
     do channSendBinary c $ commCode SetMousePos
        channSendBinary c x'
        channSendBinary c y'
@@ -204,8 +214,8 @@ setMousePos c x y =
 sendKey :: (Monad m) => Channel m -> KeyState -> KeyCode -> m ()
 sendKey c s code =
     do channSendBinary c $ commCode SendKey
-       channSendBinary c (keyEvCode s)
-       channSendBinary c (fromIntegral code :: Word32)
+       channSendBinary c s
+       channSendBinary c code
 
 sendKeyPress :: (Monad m) => Channel m -> KeyCode -> m ()
 sendKeyPress c code =
@@ -215,22 +225,17 @@ sendKeyPress c code =
 sendMouseBtn :: (Monad m) => Channel m -> KeyState -> Button -> m ()
 sendMouseBtn c s b =
     do channSendBinary c $ commCode SendMouse
-       channSendBinary c (mouseEvCode (s,b))
+       channSendBinary c s
+       channSendBinary c b
 
 sendMouseClick :: (Monad m) => Channel m -> Button -> m ()
 sendMouseClick c b =
     do sendMouseBtn c Down b
        sendMouseBtn c Up b
 
-sendMouseMove :: (Monad m) => Channel m -> Int -> Int -> m ()
+sendMouseMove :: (Monad m) => Channel m -> Word32 -> Word32 -> m ()
 sendMouseMove c dx dy =
-    do channSendBinary c $ commCode SendMouse
-       channSendBinary c (4 :: Word8)
-       channSendBinary c (fromIntegral dx :: Int32)
-       channSendBinary c (fromIntegral dy :: Int32)
-
--- we can use comm channel as a process..
-instance (MonadIO m) => Process m (Channel m) where
-    processGetModuleHandle c name = getModuleHandle c name
-    processReadMemory c addr len = readProcessMemory c addr len
+    do channSendBinary c $ commCode SendMouseMove
+       channSendBinary c dx
+       channSendBinary c dy
 

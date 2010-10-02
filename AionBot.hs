@@ -90,7 +90,7 @@ rotateCamera delta =
                do parkMouse
                   sendMouseBtn C.Down C.R
                   delay 0.05
-                  c <- getChannel >>= \ch -> liftIO $ getCamera ch
+                  c <- getChannel >>= \ch -> liftIO $ C.recvCamera ch
                   -- target rotation angle
                   let t_r = snap $ camera_rot c + delta
                   rotate (camera_rot c) t_r
@@ -110,7 +110,7 @@ rotateCamera delta =
                  sendMouseMove (round dx) 0
                  -- delay and fetch new camera orientation from game, then continue with rotation
                  delay 0.01
-                 c <- getChannel >>= \ch -> liftIO $ getCamera ch
+                 c <- getChannel >>= \ch -> liftIO $ C.recvCamera ch
                  rotate (camera_rot c) t_r
     
 -- aim given direction
@@ -151,8 +151,8 @@ data BotState = BotState { channel   :: Channel IO
 updateState :: AionBot ()
 updateState =
     do c <- getChannel
-       p <- liftIO $ getPlayerData c
-       e <- liftIO $ getEntityList c
+       p <- liftIO $ C.recvPlayer c
+       e <- liftIO $ C.recvEntityList c
        let e_map = M.fromList $ zip (map entity_id e) e
        liftState . modify $ \s -> s { player = p, entities = e, entity_map = e_map }
 

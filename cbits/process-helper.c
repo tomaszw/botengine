@@ -57,7 +57,7 @@ static BOOL CALLBACK find_window_proc( HWND hwnd, LPARAM data_ )
   return TRUE;
 }
 
-static HWND find_window( const char *caption )
+HWND find_window( const char *caption )
 {
   HWND hwnd = NULL;
   find_data data;
@@ -82,6 +82,13 @@ HANDLE open_process_by_window_name( const char *name )
   }
   return 0;
 }
+
+void read_process_memory( HANDLE process, DWORD addr, DWORD len, void *data )
+{
+  SIZE_T num_read;
+  ReadProcessMemory( process, (LPVOID*) addr, data, len, &num_read );
+}
+
 
 BOOL patch_is_debugger_present(HANDLE process)
 {
