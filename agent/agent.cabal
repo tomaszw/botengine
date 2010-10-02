@@ -5,7 +5,7 @@ Build-Type: Simple
 Cabal-Version: >= 1.2
 
 Executable agent
-  hs-source-dirs: common agent
+  hs-source-dirs: ../common .
   Main-is: Agent.hs
   Extensions: GeneralizedNewtypeDeriving, GADTs, ExistentialQuantification, MultiParamTypeClasses, RankNTypes, PatternGuards, ForeignFunctionInterface, FlexibleContexts,FlexibleInstances
   Build-Depends:

@@ -5,7 +5,7 @@ Build-Type: Simple
 Cabal-Version: >= 1.2
 
 Executable bot
-  hs-source-dirs: common bot
+  hs-source-dirs: ../common .
   Main-is: Main.hs             
   Extensions: GeneralizedNewtypeDeriving, GADTs, ExistentialQuantification, MultiParamTypeClasses, RankNTypes, PatternGuards, ForeignFunctionInterface, FlexibleContexts,FlexibleInstances
   Build-Depends:
