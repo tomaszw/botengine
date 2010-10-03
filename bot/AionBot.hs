@@ -46,6 +46,7 @@ import RemoteCommand
 import GameState
 import Math
 import Keys
+import AionBotConfig
 
 newtype AionBot a = AionBot { unBot :: MicroThreadT (StateT BotState IO) a }
     deriving ( Functor, Monad, MonadMicroThread )
@@ -256,6 +257,7 @@ data BotState = BotState { agent_channel   :: CommandChannel IO
                          , entities        :: [Entity]
                          , entity_map      :: Map Int Entity
                          , combat_map      :: [CombatMob]
+                         , config          :: AionBotConfig
                          }
 
 -- state of combat with given mob
@@ -326,6 +328,17 @@ isDead id =
     where
       test Nothing  = return False
       test (Just e) = return $ isDeadPure e
+
+execute :: Rotation -> AionBot ()
+execute r@(Repeat elems) = mapM_ execute_elem elems >> execute r
+execute r@(Once elems)   = mapM_ execute_elem elems
+
+execute_elem :: RotationElem -> AionBot ()
+execute_elem (Rotation nest) = execute nest
+execute_elem (KeyPress key) = keyPress key
+execute_elem (KeyHold key) = keyState Down key
+execute_elem (KeyRelease key) = keyState Up key
+execute_elem (Delay dt) = delay dt
 
 -- access list of mobs in combat with player
 getCombatants :: AionBot [Entity]
@@ -412,7 +425,8 @@ runAionBot agent_ch game_state aionbot =
                   , player = undefined
                   , entities = undefined
                   , entity_map = undefined
-                  , combat_map = [] }
+                  , combat_map = []
+                  , config = defaultConfig }
 
 -- forks it in background
 runAbortableAionBot :: CommandChannel IO -> GameState -> AionBot () -> IO (ThreadId, IO (), MVar ())
