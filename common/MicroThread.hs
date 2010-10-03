@@ -102,11 +102,8 @@ instance MonadMicroThread (MicroThreadT m) where
     -- destroys all threads
     abort =
         do s <- get
-           current <- getCurrentThread
-           let all_ids = filter (\id -> id /= current) $ map threadID (threads s)
-           mapM_ terminate all_ids
-           -- sepuku
-           terminate current
+           trace $ "ABORT CALLED, current threads: " ++ show (map threadID (threads s))
+           yield Abort
 
 waitCompletion :: (MonadMicroThread m) => ThreadID -> m ()
 waitCompletion id = wait (isThreadAlive id >>= return . not)
@@ -148,6 +145,7 @@ data Yield m = Delay Float
              | Nop
              | Die
              | Kill ThreadID
+             | Abort
 
 instance Show (Yield m) where
     show (Delay f) = printf "delay %2.4f" f
@@ -156,6 +154,7 @@ instance Show (Yield m) where
     show Die = "die"
     show Nop = "nop"
     show (Kill id) = "kill " ++ show id
+    show Abort = "abort"
 
 data SystemState m = SystemState
     {
@@ -164,6 +163,7 @@ data SystemState m = SystemState
     , threads :: [Thread m]
     , spark_threads :: [Thread m]
     , max_thread_id :: ThreadID
+    , abortSystem :: Bool
     }
 
 yield :: Yield m -> MicroThreadT m ()
@@ -280,6 +280,12 @@ runner t0 =
         modify ( \s -> s { current = thread
                          , jumpout = engine
                          } )
+        s <- get
+        case (abortSystem s) of
+          True  -> return Die
+          False -> exec_real thread engine
+
+      exec_real thread engine = do
         pred <- contThreadPred thread
         v <- check_invariants thread
         case (pred,v) of
@@ -325,6 +331,7 @@ runner t0 =
           Kill id'       -> do killThread id'
                                replace id $ thread { scheduled = t + quantum_dt }
           Die            -> killThread id
+          Abort          -> modify $ \s -> s { abortSystem = True }
 
       check_invariants :: Thread m -> MicroThreadT m [MicroThreadT m ()]
       check_invariants x = do
@@ -350,4 +357,5 @@ runMicroThreadT req bot =
                        , threads = [ newThread 0 bot ]
                        , spark_threads = [ ]
                        , max_thread_id = 0
+                       , abortSystem = False
                        }

@@ -301,7 +301,8 @@ runAbortableAionBot agent_ch game_state action =
       aborter var =
           do empty <- liftIO $ isEmptyMVar var
              when (not empty) $
-                  abort
+                  do debug "ABORTING!"
+                     abort
              delay 0.1
              aborter var
       abort_fun var =
@@ -311,8 +312,8 @@ runAbortableAionBot agent_ch game_state action =
 ioHandler :: (MonadIO m) => UTCTime -> Request a -> m a
 ioHandler t0 (ThreadDelay secs) = liftIO . threadDelay $ round (secs * 10^6)
 ioHandler t0 GetCurrentTime = liftIO $ ioDiffTime t0
---ioHandler t0 (Trace msg) = liftIO . putStrLn $ "thread> " ++ msg
-ioHandler t0 (Trace msg) = return ()
+ioHandler t0 (Trace msg) = liftIO . putStrLn $ "thread> " ++ msg
+--ioHandler t0 (Trace msg) = return ()
 
 ioDiffTime :: UTCTime -> IO Float
 ioDiffTime t0 =
