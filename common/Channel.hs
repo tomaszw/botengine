@@ -1,7 +1,7 @@
 module Channel ( Channel
             , KeyState(..), Button(..), KeyCode
             , Command (..), commCode, commFromCode
-            , channelFromSocket
+            , channelFromTCPSocket
             , channelFromUDPSocket
             , getModuleHandle
             , getGameWindow
@@ -10,8 +10,8 @@ module Channel ( Channel
             , readProcessMemory
             , setMousePos
             , sendKey, sendKeyPress, sendMouseBtn, sendMouseClick, sendMouseMove
-            , channSendA
-            , channRecvA
+            , channSend
+            , channRecv
             , channSendBinary
             , channRecvBinary'
             , recvPlayer
@@ -35,21 +35,44 @@ import Foreign.C.Types
 
 import Aion
 
-data Channel m = Channel { channSend :: ByteString -> m Int
+data Channel m = Channel { channSend :: ByteString -> m ()
                          , channRecv :: Int -> m ByteString }
 
-channelFromSocket :: (MonadIO m) => Socket -> Channel m
-channelFromSocket s = Channel { channSend = \buf -> liftIO $ fromIntegral <$> (lazy_send s buf)
-                              , channRecv = \sz  -> liftIO (recv s (fromIntegral sz)) }
+channelFromTCPSocket :: (MonadIO m) => Socket -> Channel m
+channelFromTCPSocket s =
+    Channel { channSend = \buf -> liftIO $ send_all buf
+            , channRecv = \sz  -> liftIO (recv s (fromIntegral sz)) }
+    where
+      send_all buf =
+          do num <- send buf
+             let l = fromIntegral (BL.length buf)
+             when (num < l) $ 
+                  do let xs = BL.drop (fromIntegral num) buf
+                     send_all xs
+      send buf = liftIO $ fromIntegral <$> (lazy_send s buf)
 
-channelFromUDPSocket :: (MonadIO m) => Socket -> SockAddr -> Channel m
-channelFromUDPSocket s addr =
+      recv_all sz =
+          do xs <- recv_ sz
+             let l = fromIntegral $ BL.length xs
+             if l < sz && l > 0
+               then do ys <- recv_all (sz - l)
+                       return $ BL.append xs ys
+               else if l == 0
+                      then error "EOF"
+                      else return xs
+      recv_ sz = liftIO (recv s (fromIntegral sz))
+
+
+channelFromUDPSocket :: (MonadIO m) => Socket -> (Maybe SockAddr) -> Channel m
+channelFromUDPSocket s maybe_addr =
     Channel { channSend = udp_send
             , channRecv = udp_recv }
     where
-      udp_send buf = liftIO $ NBS.sendTo s (unLazy buf) addr
-      udp_recv sz  = liftIO $ do (buf,addr') <- NBS.recvFrom s sz
-                                 return $ toLazy buf
+      udp_send buf
+          | Just addr <- maybe_addr = liftIO $ NBS.sendTo s (unLazy buf) addr >> return ()
+          | otherwise               = error "udp_send: unknown destination"
+      udp_recv sz = liftIO $ do (buf,addr') <- NBS.recvFrom s sz
+                                return $ toLazy buf
       unLazy   = B.concat . BL.toChunks
       toLazy s = BL.fromChunks [s]
 
@@ -102,37 +125,18 @@ lazy_send s b =
     let b' = foldl' B.append B.empty (BL.toChunks b) in
     NBS.send s b'
 
-channSendA :: (Monad m) => Channel m -> ByteString -> m ()
-channSendA c buf =
-    do num <- channSend c buf
-       let l = fromIntegral (BL.length buf)
-       when (num < l) $ 
-            do let xs = BL.drop (fromIntegral num) buf
-               channSendA c xs
-
-channRecvA :: (Monad m) => Channel m -> Int -> m ByteString
-channRecvA c sz =
-    do xs <- channRecv c sz
-       let l = fromIntegral $ BL.length xs
-       if l < sz && l > 0
-          then do ys <- channRecvA c (sz - l)
-                  return $ BL.append xs ys
-          else if l == 0
-                  then error "EOF"
-                  else return xs
-
 channSendBinary :: (Monad m, Binary b) => Channel m -> b -> m ()
-channSendBinary c v = channSendA c (encode v)
+channSendBinary c v = channSend c (encode v)
 
 channRecvBinary_ :: (Monad m, Binary b, Storable b) => Channel m -> b -> m b
 channRecvBinary_ c v = let l = sizeOf v in
-                    do buf <- channRecvA c l
+                    do buf <- channRecv c l
                        return $ decode buf
 channRecvBinary c = channRecvBinary_ c undefined
 
 channRecvBinary' :: (Monad m, Binary b) => Channel m -> Int -> m b
 channRecvBinary' c len =
-    do buf <- channRecvA c len
+    do buf <- channRecv c len
        return $ decode buf
 
 recvCamera :: (Monad m) => Channel m -> m Camera
@@ -178,7 +182,7 @@ instance Binary Button where
 
 sendString :: (Monad m) => Channel m -> String -> m ()
 sendString c s =
-    do channSendA c (UTF8.fromString s)
+    do channSend c (UTF8.fromString s)
        channSendBinary c $ ( 0 :: Word8 )
 
 getModuleHandle :: (Monad m) => Channel m -> String -> m Word32
@@ -208,7 +212,7 @@ readProcessMemory c offset len =
     do channSendBinary c $ commCode ReadProcessMemory
        channSendBinary c offset
        channSendBinary c (fromIntegral len :: Word32)
-       channRecvA c len
+       channRecv c len
 
 setMousePos :: (Monad m) => Channel m -> Float -> Float -> m ()
 setMousePos c x y =
