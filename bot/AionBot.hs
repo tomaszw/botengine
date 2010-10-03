@@ -21,8 +21,12 @@ module AionBot ( AionBot
                , backpedal
                , jump
                , walkToTarget
-
+                 
                , killTarget
+               , kill
+
+               , grind
+
                ) where
 
 import Common
@@ -90,6 +94,17 @@ keyPress code =
            delay 0.1
            liftIO $ sendCommand c (ChangeKeyState Up code)
            delay 0.1
+
+---
+--- FIXME: how to do this in core microthread monad?
+---
+timeoutWithRVal :: Float -> AionBot a -> AionBot (Maybe a)
+timeoutWithRVal max_t action =
+    do mvar <- liftIO $ newEmptyMVar
+       timeout max_t $
+               do r <- action
+                  liftIO $ putMVar mvar r
+       liftIO . tryTakeMVar $ mvar
 
 ----
 ---- Control Commands
@@ -247,6 +262,15 @@ walkToTarget maxtime =
     where walk Nothing = return ()
           walk (Just t) = walkTo maxtime (entity_pos t)
 
+-- pull current target
+pullTarget :: AionBot ()
+pullTarget = getTarget >>= pull
+    where
+      pull Nothing  = return ()
+      pull (Just t) =
+          do info $ "pulling " ++ (entity_name t)
+             killTarget
+
 -- attack current target
 attackTarget :: AionBot ()
 attackTarget =
@@ -272,6 +296,111 @@ killTarget =
              info $ "executing combat rotation!"
              execute (combat_rotation c)
 
+-- select & kill entity
+kill :: Entity -> AionBot ()
+kill t = do s <- select t
+            when s $ killTarget
+
+-- select entity, max few secs to try to select it
+select :: Entity -> AionBot Bool
+select e = do
+    r <- timeoutWithRVal 3.0 $ do
+             withSpark aim $ \_ ->
+                 try_select
+    case r of
+      Just True -> return True
+      _         -> do info $ "failed to select " ++ entity_name e
+                      return False
+
+    where
+      aim = aimEntity e >> aim
+      try_select :: AionBot Bool
+      try_select =
+          do t <- getTarget
+             case t of
+               Just t | t == e    -> return True
+                      | otherwise -> nextTarget >> try_select
+    
+------------------------------
+---- PRIMARY GRINDING ROUTINE! awesome in its simplicity
+------------------------------
+grind :: AionBot ()
+grind =
+    invariant alive died $
+    invariant (not <$> inCombat) (retaliate >> grind) $
+              grindy_grind
+    where
+      grindy_grind =
+          do pickGrindTarget
+             pullTarget
+             grindy_grind
+
+      alive = not <$> isPlayerDead
+
+pickGrindTarget :: AionBot ()
+pickGrindTarget =
+    do picked <- timeoutWithRVal 4 $ pickStatic
+       case picked of
+         Just True -> return ()
+         _         -> rotateCamera 60 >> pickGrindTarget
+    where
+      pickStatic :: AionBot Bool
+      pickStatic = do
+        t <- getTarget
+        case t of
+          Nothing -> nextTarget >> pickStatic
+          Just t  ->
+              do ok <- suitableGrindTarget t
+                 if ok
+                   then return True
+                   else nextTarget >> pickStatic
+
+suitableGrindTarget :: Entity -> AionBot Bool
+suitableGrindTarget t =
+    do ply <- getPlayer
+       cfg <- getConfig
+       its_target <- getEntity (entity_target_id t)
+       let its_target_type = maybe EOther entity_type its_target
+
+       case () of
+         _ | dead                       -> return False -- don't kill corpses
+           | not (level_ok ply cfg)     -> return False -- don't kill out of level range
+           | its_target_type == EPlayer -> return False -- don't kill if targetting other player
+           | otherwise                  -> return True
+    where
+      dead = isDeadPure t
+      targetting id = entity_target_id t == id
+      level_ok ply cfg =
+          level >= ply_level - (threshold_grind_lower_level cfg) &&
+          level <= ply_level + (threshold_grind_upper_level cfg)
+          where level     = entity_level t
+                ply_level = player_level ply
+
+died :: AionBot ()
+died = 
+    do info "I AM DEAD :("
+       return () -- TODO: resurrect
+
+
+-- we were happily doing some interesting stuff when bad things attacked us
+retaliate :: AionBot ()
+retaliate =
+    do info "ROMA VICTA!!!! (retaliating against surprise attack)"
+       ply  <- getPlayer
+       mobs <- distanceSort (player_pos ply) <$> getCombatants
+       case mobs of
+         [ ]   -> info "nobody to retaliate on :(" >> return ()
+         (m:_) -> whack m
+    where
+      whack m = do info $ (entity_name m) ++ "'s blood will fill a river"
+                   kill m
+                   retaliate
+
+distanceSort :: Vec3 -> [Entity] -> [Entity]
+distanceSort p es = sortBy (comparing distance) es
+    where
+      distance e = let p' = entity_pos e in
+                   len (p' $- p)
 ----
 ---- Bot state
 ----
@@ -342,6 +471,12 @@ inCombatWith e =
     do combatants <- getCombatants
        return $ e `elem` combatants
 
+-- check if player is in combat
+inCombat :: AionBot Bool
+inCombat =
+    do combatants <- getCombatants
+       return . not . null $ combatants
+
 isDeadPure :: Entity -> Bool
 isDeadPure e | entity_hp e <= 0 || entity_state e == EntityDead = True
              | otherwise = False
@@ -352,6 +487,18 @@ isDead id =
     where
       test Nothing  = return False
       test (Just e) = return $ isDeadPure e
+
+isPlayerDead :: AionBot Bool
+isPlayerDead =
+    do p <- getPlayer
+       isDead (player_id p)
+       
+isFullHealth :: EntityID -> AionBot Bool
+isFullHealth id =
+    getEntity id >>= test
+    where
+      test Nothing  = return False
+      test (Just e) = return (entity_hp e == 100)
 
 execute :: Rotation -> AionBot ()
 execute r@(Repeat elems) = mapM_ execute_elem elems >> execute r

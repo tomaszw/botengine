@@ -12,6 +12,8 @@ data AionBotConfig = AionBotConfig
     {
       combat_rotation :: Rotation
     , loot_key :: KeyCode
+    , threshold_grind_upper_level :: Int
+    , threshold_grind_lower_level :: Int
     }
 
 defaultConfig :: AionBotConfig
@@ -22,10 +24,13 @@ defaultConfig =
                                , qb 3, Delay 0.2
                                , qb 4, Delay 0.2
                                , qb 5, Delay 0.2
-                               , qb 6, Delay 0.2 ]
-                               --, aqb 2, Delay 0.2
-                               --, aqb 5, Delay 0.2 ]
+                               , qb 6, Delay 0.2
+                               , aqb 2, Delay 0.2
+                               , aqb 5, Delay 0.2 ]
     , loot_key = keyQuickbarBase + 0
+    -- grind mob this number of levels higher/lower
+    , threshold_grind_upper_level = 1
+    , threshold_grind_lower_level = 5
     }
     where
       -- quickbar
