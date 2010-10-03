@@ -24,13 +24,13 @@ instance Binary KeyState where
     put Up = put (0 :: Word8)
     put Down = put (1 :: Word8)
     get = do c <- get :: Get Word8
-             case c of { 0 -> return Up; 1 -> return Down }
+             case c of { 0 -> return Up; 1 -> return Down; _ -> error "error reading key state" }
 
 instance Binary Button where
     put L = put (0 :: Word8)
     put R = put (1 :: Word8)
     get = do c <- get :: Get Word8
-             case c of { 0 -> return L; 1 -> return R }
+             case c of { 0 -> return L; 1 -> return R; _ -> error "error reading button" }
 
 data CommandChannel m = CommandChannel { channel      :: Channel m
                                        , datagram_sz  :: Int
@@ -89,6 +89,7 @@ instance Binary Command where
                9 -> return GetForegroundWindow
                10 -> do { w <- get; return $ SetForegroundWindow w }
                11 -> return GetGameWindow
+               _ -> error "error reading command"
 
 sendCommand :: (MonadIO m) => CommandChannel m -> Command -> m ()
 sendCommand (CommandChannel ch sz cnt) cmd

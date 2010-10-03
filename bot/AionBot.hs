@@ -275,15 +275,14 @@ updateState gs =
 
 runAionBot :: CommandChannel IO -> GameState -> AionBot () -> IO ()
 runAionBot agent_ch game_state aionbot =
-    do t0 <- getClockTime
-       let mt = unBot $
+    do let mt = unBot $
                 do -- initial state fetch into monad
                    updateState game_state
                    -- periodic state updates
                    spark $ stateReader game_state 0.01
                    -- rest of botting
                    aionbot
-           state = runMicroThreadT (handler t0) mt
+           state = runMicroThreadT (microThreadIOReqHandler) mt
        evalStateT state s0
   where
     s0 =
@@ -292,21 +291,6 @@ runAionBot agent_ch game_state aionbot =
                   , player = undefined
                   , entities = undefined
                   , entity_map = undefined }
-
-    handler :: ClockTime -> Request a -> StateT BotState IO a
-    handler t0 (ThreadDelay secs) = liftIO . threadDelay $ round (secs * 10^6)
-    handler t0 GetCurrentTime = liftIO $ diffTime t0
-    --handler t0 (Trace msg) = return ()
-    handler t0 (Trace msg) = liftIO . putStrLn $ "thread> " ++ msg
-
-    diffTime :: ClockTime -> IO Float
-    diffTime t0 =
-        do t1 <- getClockTime
-           let diff = diffClockTimes t1 t0
-           return $     (fromIntegral (tdHour diff) * 60 * 24)
-                      + (fromIntegral (tdMin diff) * 60)
-                      + (fromIntegral $ tdSec diff)
-                      + (fromIntegral (tdPicosec diff) / 10^12)
 
 debug :: String -> AionBot ()
 debug s = liftIO (putStrLn s)

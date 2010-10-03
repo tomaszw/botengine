@@ -1,9 +1,12 @@
-module MicroThread ( MicroThreadT
-           , MonadMicroThread (..)
-           , Request (..)
-           , waitCompletion
-           , withSpark
-           , runMicroThreadT ) where
+module MicroThread
+    ( MicroThreadT
+    , MonadMicroThread (..)
+    , Request (..)
+    , waitCompletion
+    , withSpark
+    , runMicroThreadT
+    , microThreadIOReqHandler
+    ) where
 
 import Control.Monad
 import Control.Concurrent hiding (yield, killThread)
@@ -332,3 +335,22 @@ runMicroThreadT req bot =
                        , spark_threads = [ ]
                        , max_thread_id = 0
                        }
+
+microThreadIOReqHandler :: (MonadIO m) => Request a -> m a
+microThreadIOReqHandler req = do
+  t0 <- liftIO $ getClockTime
+  ioHandler t0 req
+
+ioHandler :: (MonadIO m) => ClockTime -> Request a -> m a
+ioHandler t0 (ThreadDelay secs) = liftIO . threadDelay $ round (secs * 10^6)
+ioHandler t0 GetCurrentTime = liftIO $ ioDiffTime t0
+ioHandler t0 (Trace msg) = liftIO . putStrLn $ "thread> " ++ msg
+
+ioDiffTime :: ClockTime -> IO Float
+ioDiffTime t0 =
+    do t1 <- getClockTime
+       let diff = diffClockTimes t1 t0
+       return $     (fromIntegral (tdHour diff) * 60 * 24)
+                  + (fromIntegral (tdMin diff) * 60)
+                  + (fromIntegral $ tdSec diff)
+                  + (fromIntegral (tdPicosec diff) / 10^12)

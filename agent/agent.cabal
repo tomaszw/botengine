@@ -7,6 +7,7 @@ Cabal-Version: >= 1.2
 Executable agent
   hs-source-dirs: ../common .
   Main-is: Agent.hs
+  GHC-Options: -O2 -fwarn-incomplete-patterns
   Extensions: GeneralizedNewtypeDeriving, GADTs, ExistentialQuantification, MultiParamTypeClasses, RankNTypes, PatternGuards, ForeignFunctionInterface, FlexibleContexts,FlexibleInstances
   Build-Depends:
         base >= 3 && < 5,

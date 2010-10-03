@@ -27,6 +27,7 @@ execCmd' WalkTarget = walkToTarget 10
 execCmd' NextTarget = nextTarget
 execCmd' ParkMouse = parkMouse
 execCmd' (Rotate a) = rotateCamera a
+execCmd' _ = error "bad command"
 
 parseCmd :: String -> Maybe Cmd
 parseCmd cmd =
