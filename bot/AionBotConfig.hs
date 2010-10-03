@@ -20,13 +20,13 @@ defaultConfig :: AionBotConfig
 defaultConfig =
     AionBotConfig
     {
-      combat_rotation = Repeat [ qb 2, Delay 0.2
-                               , qb 3, Delay 0.2
-                               , qb 4, Delay 0.2
-                               , qb 5, Delay 0.2
-                               , qb 6, Delay 0.2
-                               , aqb 2, Delay 0.2
-                               , aqb 5, Delay 0.2 ]
+      combat_rotation = Repeat [ qb 2, Delay 0.1
+                               , qb 3, Delay 0.1
+                               , qb 4, Delay 0.1
+                               , qb 5, Delay 0.1
+                               , qb 6, Delay 0.1
+                               , aqb 2, Delay 0.1
+                               , aqb 5, Delay 0.1 ]
     , loot_key = keyQuickbarBase + 0
     -- grind mob this number of levels higher/lower
     , threshold_grind_upper_level = 1

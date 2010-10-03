@@ -77,9 +77,16 @@ instance MonadMicroThread (MicroThreadT m) where
                id   = maxInvariantID (current s) + 1
                inv  = Invariant id hold violated
            trace $ "invariant - acquire " ++ show id
+           threadID <- getCurrentThread
+           when (length invs > 10) $
+                error $ printf "thread %d trying to hold more than 10 invariants" (show threadID)
            modifyCurrentT $ \t ->
                t { invariants = inv : invs }
            r <- f
+           threadID' <- getCurrentThread
+           when (threadID /= threadID') $
+                error $ printf "inconsistent thread id, expected %d, got %d" threadID threadID'
+
            trace $ "invariant - casual release " ++ show id
            modifyCurrentT $ \t ->
                t { invariants = filter (\i -> inv_id i /= id) (invariants t) }
@@ -134,6 +141,7 @@ data Request a where
     GetCurrentTime :: Request Float
     ThreadDelay :: Float -> Request ()
     Trace :: String -> Request ()
+    Warn :: String -> Request ()
 
 data Thread m = Thread
     {
@@ -152,7 +160,10 @@ data Invariant m = Invariant
       inv_id :: InvariantID
     , inv_hold :: MicroThreadT m Bool
     , inv_violation :: MicroThreadT m ()
-    }
+    } 
+
+instance Eq (Invariant m) where
+    a == b = (inv_id a) == (inv_id b)
 
 type InvariantID = Int64
 
@@ -257,6 +268,9 @@ killThread thread_id =
 trace :: String -> MicroThreadT m ()
 trace msg = prompt (Trace msg)
 
+warn :: String -> MicroThreadT m ()
+warn msg = prompt (Warn msg)
+
 diffTime :: Float -> MicroThreadT m Float
 diffTime t0 =
     do t <- prompt GetCurrentTime
@@ -280,7 +294,9 @@ runner t0 =
        s <- get
        case threads s of
          [] -> return ()
-         xs -> do prompt $ ThreadDelay (fromIntegral quantum_ms / 1000.0)
+         xs -> do when (length xs > 10) $
+                       warn $ "number of threads: " ++ show (length xs)
+                  prompt $ ThreadDelay (fromIntegral quantum_ms / 1000.0)
                   runner t0
     where
       handle t threads = handle' t (sortBy (comparing scheduled) threads)
@@ -320,12 +336,16 @@ runner t0 =
                   return Die
           (_,viols) -> -- if invariants don't hold, kill the thread and invoke specified actions in NEW threads
                 do let current_id = threadID thread
-                   trace $ "invariant - violation by thread " ++ show (threadID thread)
+                   trace $ "invariant - violation by thread " ++ show current_id
+                   let validate inv | inv `elem` (invariants thread) = return ()
+                                    | otherwise = error $ printf "fatal, invariant %d is not in thread's %d queue" (inv_id inv) current_id
+                   mapM_ validate viols
                    -- clear invariants for this thread
                    replace current_id $ thread { invariants = [] }
                    -- spark invariant actions
                    id <- pickThreadID
-                   let t = newThread id (head viols)
+                   -- FIXME HMM spark all ?
+                   let t = newThread id (inv_violation $ head viols)
                    return $ SparkAndDie [t]
 
       replace thread_id th' =
@@ -354,17 +374,17 @@ runner t0 =
           Die            -> killThread id
           Abort          -> modify $ \s -> s { abortSystem = True }
 
-      check_invariants :: Thread m -> MicroThreadT m [MicroThreadT m ()]
+      check_invariants :: Thread m -> MicroThreadT m [Invariant m]
       check_invariants x = do
         r <- foldM check [] (invariants x)
         return r
         where
-          check acc (Invariant id hold violated) =
+          check acc inv@(Invariant id hold violated) =
               do holds <- hold
                  if holds
                     then return acc
                     else do trace $ "invariant - violation of " ++ show id
-                            return $ violated : acc
+                            return $ inv : acc
 
 runMicroThreadT :: (Monad m) => (forall a. Request a -> m a) -> MicroThreadT m () -> m ()
 runMicroThreadT req bot =

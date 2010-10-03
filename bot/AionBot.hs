@@ -75,26 +75,26 @@ getChannel =
 click btn =
     getChannel >>= \c ->
         do liftIO $ sendCommand c (ChangeMouseState Down btn)
-           delay 0.1
+           delay 0.01
            liftIO $ sendCommand c (ChangeMouseState Up btn)
-           delay 0.1
+           delay 0.01
 
 mouseTo x y =
     getChannel >>= \c ->
         do liftIO $ sendCommand c $ AbsMoveMousePerc x y
-           delay 0.1
+           delay 0.01
 
 keyState state code =
     getChannel >>= \c ->
         do liftIO $ sendCommand c $ ChangeKeyState state code
-           delay 0.1
+           delay 0.01
 
 keyPress code =
     getChannel >>= \c ->
         do liftIO $ sendCommand c (ChangeKeyState Down code) 
-           delay 0.1
+           delay 0.01
            liftIO $ sendCommand c (ChangeKeyState Up code)
-           delay 0.1
+           delay 0.01
 
 ---
 --- FIXME: how to do this in core microthread monad?
@@ -331,15 +331,35 @@ select e = do
 ------------------------------
 grind :: AionBot ()
 grind =
-    invariant alive died $
-              grindy_grind
+    do info "HAPPY GRIND!"
+       invariant alive died $ grindy_grind
     where
       grindy_grind =
-          do invariant (not <$> inCombat) (retaliate >> grind) pickGrindTarget
-             pullTarget
+          do info "grindy grind"
+             invariant (not <$> combat_check) (retaliate >> grind) pickGrindTarget
+             pulled <- withSpark pullTarget $ \pull_id ->
+                 pull_check pull_id
+             if pulled
+                then killTarget
+                else info "ABORTED pull"
              grindy_grind
 
       alive = not <$> isPlayerDead
+      pull_check pull_id = do
+          -- just make sure noone else is attacking us
+          maybe_t <- getTarget
+          c <- getCombatants
+          case () of
+            _ | Just t <- maybe_t, not (null c), not (t `elem` c) -> terminate pull_id >> return False -- stop pulling, we are attacked by elsewhere
+              | Just t <- maybe_t, t `elem` c                     -> return True
+              | otherwise                                         -> delay 0.1 >> pull_check pull_id
+
+      combat_check =
+          do c <- inCombat
+             t <- timeSinceCombat
+             case () of
+               _ | c == True && t >= 2 -> return True
+                 | otherwise -> return False
 
 pickGrindTarget :: AionBot ()
 pickGrindTarget =
@@ -389,7 +409,8 @@ died =
 -- we were happily doing some interesting stuff when bad things attacked us
 retaliate :: AionBot ()
 retaliate =
-    do info "ROMA VICTA!!!! (retaliating against surprise attack)"
+    do t <- timeSinceCombat
+       info $ printf "ROMA VICTA!!!! (retaliating against surprise attack), %f since last combat" t
        ply  <- getPlayer
        mobs <- distanceSort (player_pos ply) <$> getCombatants
        case mobs of
@@ -408,13 +429,14 @@ distanceSort p es = sortBy (comparing distance) es
 ----
 ---- Bot state
 ----
-data BotState = BotState { agent_channel   :: CommandChannel IO
-                         , camera          :: Camera
-                         , player          :: Player
-                         , entities        :: [Entity]
-                         , entity_map      :: Map Int Entity
-                         , combat_map      :: [CombatMob]
-                         , config          :: AionBotConfig
+data BotState = BotState { agent_channel    :: CommandChannel IO
+                         , camera           :: Camera
+                         , player           :: Player
+                         , entities         :: [Entity]
+                         , entity_map           :: Map Int Entity
+                         , combat_map           :: [CombatMob]
+                         , combat_last_time_ply :: Float
+                         , config               :: AionBotConfig
                          }
 
 -- state of combat with given mob
@@ -434,6 +456,9 @@ combatExpirator period =
        liftState . put $ s { combat_map = combat' }
        delay period
        debug $ "in combat with " ++ show (length combat') ++ " monsters."
+       when (not . null $ combat') $
+            do t <- time
+               liftState . modify $ \s -> s { combat_last_time_ply = t }
        combatExpirator period
     where
       expire :: [CombatMob] -> CombatMob -> AionBot [CombatMob]
@@ -482,6 +507,14 @@ inCombat =
     do combatants <- getCombatants
        return . not . null $ combatants
 
+-- check how long since last combat
+timeSinceCombat :: AionBot Float
+timeSinceCombat =
+    do t <- time
+       s <- liftState get
+       let dt = t - (combat_last_time_ply s)
+       return dt
+
 isDeadPure :: Entity -> Bool
 isDeadPure e | entity_hp e <= 0 || entity_state e == EntityDead = True
              | otherwise = False
@@ -524,7 +557,7 @@ getCombatants =
     do s <- liftState get
        let combat = map combat_id $ combat_map s
        entities <- mapM getEntity combat
-       return $ catMaybes entities
+       return $ filter ( not . isDeadPure ) $ catMaybes entities
 
 -- access camera
 getCamera :: AionBot Camera
@@ -614,6 +647,7 @@ runAionBot agent_ch game_state aionbot =
                   , entities = undefined
                   , entity_map = undefined
                   , combat_map = []
+                  , combat_last_time_ply = -1000
                   , config = defaultConfig }
 
 -- forks it in background
@@ -643,8 +677,9 @@ runAbortableAionBot agent_ch game_state action =
 ioHandler :: (MonadIO m) => UTCTime -> Request a -> m a
 ioHandler t0 (ThreadDelay secs) = liftIO . threadDelay $ round (secs * 10^6)
 ioHandler t0 GetCurrentTime = liftIO $ ioDiffTime t0
-ioHandler t0 (Trace msg) = liftIO . debugIO $ "thread> " ++ msg
---ioHandler t0 (Trace msg) = return ()
+--ioHandler t0 (Trace msg) = liftIO . debugIO $ "thread> " ++ msg
+ioHandler t0 (Trace msg) = return ()
+ioHandler t0 (Warn msg) = liftIO . debugIO $ "WARNING!!! thread> " ++ msg
 
 ioDiffTime :: UTCTime -> IO Float
 ioDiffTime t0 =
