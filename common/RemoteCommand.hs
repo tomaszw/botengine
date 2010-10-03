@@ -104,7 +104,7 @@ createStateUpdatesChannel sock addr =
        let ch = channelFromUDPSocket sock addr
        return $ CommandChannel
                   {
-                    ch_send = \cmd -> liftIO (debugIO $ "send-c " ++ show cmd) >> sendCountedPacket ch 16384 cmd counter
+                    ch_send = \cmd -> {- liftIO (debugIO $ "send-c " ++ show cmd) >> -} sendCountedPacket ch 16384 cmd counter
                   , ch_read = readCountedPacket ch 16384 counter
                   }
 
@@ -114,6 +114,6 @@ createGameControlChannel sock  =
     do let ch = channelFromTCPSocket sock
        return $ CommandChannel
                   { 
-                    ch_send = \cmd -> liftIO (debugIO $ "send-l " ++ show cmd) >> sendLengthEncodedPacket ch cmd
+                    ch_send = \cmd -> {- liftIO (debugIO $ "send-l " ++ show cmd) >> -} sendLengthEncodedPacket ch cmd
                   , ch_read = readLengthEncodedPacket ch
                   }

@@ -21,12 +21,13 @@ module AionBot ( AionBot
                , backpedal
                , jump
                , walkToTarget
-                 
+
                , killTarget
                , kill
+               , loot
 
                , grind
-
+               , pickGrindTarget
                ) where
 
 import Common
@@ -301,6 +302,10 @@ kill :: Entity -> AionBot ()
 kill t = do s <- select t
             when s $ killTarget
 
+--
+loot :: AionBot ()
+loot = getConfig >>= \c -> keyPress (loot_key c)
+
 -- select entity, max few secs to try to select it
 select :: Entity -> AionBot Bool
 select e = do
@@ -338,10 +343,10 @@ grind =
 
 pickGrindTarget :: AionBot ()
 pickGrindTarget =
-    do picked <- timeoutWithRVal 4 $ pickStatic
+    do picked <- timeoutWithRVal 2 $ pickStatic
        case picked of
-         Just True -> return ()
-         _         -> rotateCamera 60 >> pickGrindTarget
+         Just True -> debug "PICKED grind target!"
+         _         -> debug "ROTATE, repeat" >> rotateCamera 60 >> pickGrindTarget
     where
       pickStatic :: AionBot Bool
       pickStatic = do
@@ -505,7 +510,7 @@ execute r@(Repeat elems) = mapM_ execute_elem elems >> execute r
 execute r@(Once elems)   = mapM_ execute_elem elems
 
 execute_elem :: RotationElem -> AionBot ()
-execute_elem e = debug (show e) >> execute_elem' e
+execute_elem e = {- debug (show e) >> -} execute_elem' e
 execute_elem' :: RotationElem -> AionBot ()
 execute_elem' (Rotation nest) = execute nest
 execute_elem' (KeyPress key) = keyPress key
@@ -638,8 +643,8 @@ runAbortableAionBot agent_ch game_state action =
 ioHandler :: (MonadIO m) => UTCTime -> Request a -> m a
 ioHandler t0 (ThreadDelay secs) = liftIO . threadDelay $ round (secs * 10^6)
 ioHandler t0 GetCurrentTime = liftIO $ ioDiffTime t0
---ioHandler t0 (Trace msg) = liftIO . putStrLn $ "thread> " ++ msg
-ioHandler t0 (Trace msg) = return ()
+ioHandler t0 (Trace msg) = liftIO . debugIO $ "thread> " ++ msg
+--ioHandler t0 (Trace msg) = return ()
 
 ioDiffTime :: UTCTime -> IO Float
 ioDiffTime t0 =

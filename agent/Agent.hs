@@ -106,8 +106,7 @@ data ConversationState = ConversationState { cameraOrienter :: MVar ThreadId }
 conversation :: WinProcess -> HWND -> CommandChannel IO -> ConversationState -> IO ()
 conversation p hwnd ch state = 
     do cmd <- readCommand ch
-       tim <- getCurrentTime
-       debug $ (show tim) ++ ": " ++ show cmd
+       debug (show cmd)
        handle cmd
        conversation p hwnd ch state
     where

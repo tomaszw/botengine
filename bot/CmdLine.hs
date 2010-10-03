@@ -14,6 +14,8 @@ data Cmd = Abort | Quit | NextTarget | AimTarget | WalkTarget | TargetInfo | Pla
          | Walk | Backpedal
          | Kill
          | Grind
+         | Pick
+         | Loot
 
 execCmd :: Cmd -> AionBot ()
 execCmd cmd = 
@@ -36,6 +38,8 @@ execCmd' Jump = jump
 execCmd' Walk = walk
 execCmd' Backpedal = backpedal
 execCmd' Kill = killTarget
+execCmd' Pick = pickGrindTarget
+execCmd' Loot = loot
 execCmd' (Forward secs) = timeout secs $ walk
 execCmd' (Rotate a) = rotateCamera a
 execCmd' _ = error "bad command"
@@ -59,6 +63,8 @@ parseCmd cmd =
       ["d"] -> Just (Strafe StrafeRight)
       ["w"] -> Just Walk
       ["s"] -> Just Backpedal
+      ["pick"] -> Just Pick
+      ["loot"] -> Just Loot
       ["grind"] -> Just Grind
       ["forward", secs_str] ->
           case reads secs_str of
