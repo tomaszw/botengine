@@ -1,11 +1,6 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving, GADTs, ExistentialQuantification, MultiParamTypeClasses, RankNTypes #-}
 module AionBot ( AionBot, runAionBot
-               , updateState
-               , updateStateFromChannel
-               , stateReader
-
                , parkMouse
-
                , getPlayer
                , getPlayerEntity
                , getTarget
@@ -30,16 +25,12 @@ import Text.Printf
 import Network.Socket hiding (sendTo, recvFrom)
 import Network.Socket.ByteString (sendTo, recvFrom)
 
-import GameState
 import MicroThread
 import Aion hiding (getCamera)
-import Channel ( Channel )
-import qualified Channel as C
+import RemoteCommand
+import GameState
 import Math
 import Keys
-
-import Packet
-import RemoteCommand
 
 newtype AionBot a = AionBot { unBot :: MicroThreadT (StateT BotState IO) a }
     deriving ( Monad, MonadMicroThread )
@@ -49,31 +40,21 @@ instance MonadIO AionBot where
 
 liftState = AionBot . lift
 
-getChannel :: AionBot (Channel IO)
+getChannel :: AionBot (CommandChannel IO)
 getChannel =
     do s <- liftState get
-       return $ channel s
+       return $ agent_channel s
 
 
 ----
 ---- Wrappers around some comm channel functions so we don't have to pass channel everywhere
 ----
-setMousePos x y = getChannel >>= \c -> liftIO $ C.setMousePos c x y
-sendKey state code = getChannel >>= \c -> liftIO $ C.sendKey c state code
-sendKeyPress code = getChannel >>= \c -> liftIO $ C.sendKeyPress c code
-sendMouseBtn state btn = getChannel >>= \c -> liftIO $ C.sendMouseBtn c state btn
-sendMouseClick btn = getChannel >>= \c -> liftIO $ C.sendMouseClick c btn
-sendMouseMove dx dy = getChannel >>= \c -> liftIO $ C.sendMouseMove c dx dy
-
--- udp send mouse move
-sendMouseMoveFast dx dy =
-    do s <- liftState get
-       let udps = udpsock s
-           addr = udpaddr s
-           p = Packet { packet_id = 0
-                      , packet_addr = Nothing
-                      , packet_data = MoveMouse (fromIntegral dx) (fromIntegral dy) }
-       liftIO $ sendTo udps (B.concat . BL.toChunks $ encode p) addr
+setMousePos x y = getChannel >>= \c -> liftIO $ sendCommand c $ AbsMoveMousePerc x y
+sendKey state code = getChannel >>= \c -> liftIO $ sendCommand c $ ChangeKeyState state code
+sendKeyPress code = getChannel >>= \c -> liftIO $ sendCommand c (ChangeKeyState Down code) >> sendCommand c (ChangeKeyState Up code)
+sendMouseBtn state btn = getChannel >>= \c -> liftIO $ sendCommand c (ChangeMouseState state btn)
+sendMouseClick btn = getChannel >>= \c -> liftIO $ sendCommand c (ChangeMouseState Down btn)>> sendCommand c (ChangeMouseState Up btn)
+sendMouseMove dx dy = getChannel >>= \c -> liftIO $ sendCommand c (RelMoveMouse dx dy)
 
 ----
 ---- Control Commands
@@ -107,6 +88,26 @@ snap a | a >= 180    = snap (a-360)
        | a <  (-180) = snap (a+360)
        | otherwise   = a
 
+waitToRotateCamera :: Float -> AionBot()
+waitToRotateCamera t_r =
+    wait rotated
+    where
+      rotated = 
+          do c <- getCamera
+             let diff = abs (t_r - camera_rot c)
+             return $ diff <= 2
+
+-- rotate camera by given amount
+rotateCamera :: Float -> AionBot ()
+rotateCamera delta =
+    -- shouldn't be taking more than few secs
+    do c <- getCamera
+       let t_r = snap $ camera_rot c + delta
+       ch <- getChannel
+       liftIO $ sendCommand ch (OrientCamera t_r)
+       -- wait until rotation matches
+       timeout 2.0 (waitToRotateCamera t_r)
+{-
 -- rotate camera by given amount
 rotateCamera :: Float -> AionBot ()
 rotateCamera delta =
@@ -143,6 +144,7 @@ rotateCamera delta =
                  delay 0.1
                  c <- getCamera
                  rotate (camera_rot c) t_r
+-}
     
 -- aim given direction
 aimDirection :: Vec3 -> AionBot ()
@@ -196,13 +198,13 @@ walkTo maxtime p =
           True  -> return ()
           False -> do aimPoint p
                       withSpark keepAim $ \_ ->
-                          do sendKey C.Down keyForward
+                          do sendKey Down keyForward
                              timeout maxtime walk
-                             sendKey C.Up keyForward
+                             sendKey Up keyForward
   where
     walk = finished >>= \f ->
            case f of
-             True  -> sendKey C.Up keyForward >> debug "TARGET REACHED"
+             True  -> sendKey Up keyForward >> info "TARGET REACHED!"
              False -> delay 0.25 >> walk
     keepAim = aimPoint p >> keepAim
     finished = getPlayer >>= \ply ->
@@ -220,34 +222,16 @@ walkToTarget maxtime =
 ----
 ---- Bot state
 ----
-data BotState = BotState { channel   :: Channel IO
-                         , udpsock   :: Socket
-                         , udpaddr   :: SockAddr
+data BotState = BotState { agent_channel   :: CommandChannel IO
                          , camera    :: Camera
                          , player    :: Player
                          , entities  :: [Entity]
                          , entity_map :: Map Int Entity }
 
--- fetch complete state from game
-updateStateFromChannel :: AionBot ()
-updateStateFromChannel =
-    do c <- getChannel
-       p <- liftIO $ C.recvPlayer c
-       e <- liftIO $ C.recvEntityList c
-       let e_map = M.fromList $ zip (map entity_id e) e
-       liftState . modify $ \s -> s { player = p, entities = e, entity_map = e_map }
-
--- fetch complete state from game
-updateState :: GameState -> AionBot ()
-updateState gs =
-    do cam <- liftIO $ readIORef (game_camera gs)
-       ply <- liftIO $ readIORef (game_player gs)
-       ent <- liftIO $ readIORef (game_entities gs)
-       entm <- liftIO $ readIORef (game_entity_map gs)
-       liftState . modify $ \s -> s { camera = cam
-                                    , player = ply
-                                    , entities = ent
-                                    , entity_map = entm }
+-- periodically read state from GameState object
+stateReader :: GameState -> Float -> AionBot ()
+stateReader gs period =
+    updateState gs >> delay period >> stateReader gs period
 
 -- access camera
 getCamera :: AionBot Camera
@@ -277,38 +261,37 @@ getEntities = liftState get >>= return . entities
 getTarget :: AionBot (Maybe Entity)
 getTarget = getPlayerEntity >>= \p -> getEntity (entity_target_id p)
 
---theBot :: AionBot ()
---theBot = spark (stateReader 0.5) >> idle
+-- fetch complete state from game
+updateState :: GameState -> AionBot ()
+updateState gs =
+    do cam <- liftIO $ readIORef (game_camera gs)
+       ply <- liftIO $ readIORef (game_player gs)
+       ent <- liftIO $ readIORef (game_entities gs)
+       let ent_m = M.fromList $ zip (map entity_id ent) ent
+       liftState . modify $ \s -> s { camera = cam
+                                    , player = ply
+                                    , entities = ent
+                                    , entity_map = ent_m }
 
-idle :: AionBot ()
-idle =
-    do delay 0.25
-       liftIO $ putStrLn "ha, ha" >> hFlush stdout
-       idle
-
--- periodically read state from GameState object
-stateReader :: GameState -> Float -> AionBot ()
-stateReader gs period =
-    updateState gs >> delay period >> stateReader gs period
-
-runAionBot :: Channel IO -> AionBot () -> IO ()
-runAionBot c aionbot =
-    do udp <- socket AF_INET Datagram defaultProtocol
-       a <- inet_addr "192.168.1.2"
-       let addr = SockAddrInet 5555 a
-       t0 <- getClockTime
-       let mt = unBot aionbot
+runAionBot :: CommandChannel IO -> GameState -> AionBot () -> IO ()
+runAionBot agent_ch game_state aionbot =
+    do t0 <- getClockTime
+       let mt = unBot $
+                do -- initial state fetch into monad
+                   updateState game_state
+                   -- periodic state updates
+                   spark $ stateReader game_state 0.01
+                   -- rest of botting
+                   aionbot
            state = runMicroThreadT (handler t0) mt
-       evalStateT state (s0 udp addr)
+       evalStateT state s0
   where
-    s0 udp addr =
-         BotState { channel = c
+    s0 =
+         BotState { agent_channel = agent_ch
                   , camera = undefined
                   , player = undefined
                   , entities = undefined
-                  , entity_map = undefined
-                  , udpsock = udp
-                  , udpaddr = addr }
+                  , entity_map = undefined }
 
     handler :: ClockTime -> Request a -> StateT BotState IO a
     handler t0 (ThreadDelay secs) = liftIO . threadDelay $ round (secs * 10^6)
@@ -325,9 +308,8 @@ runAionBot c aionbot =
                       + (fromIntegral $ tdSec diff)
                       + (fromIntegral (tdPicosec diff) / 10^12)
 
---runTheBot :: Channel IO -> IO ()
---runTheBot channel = runAionBot channel theBot
-
 debug :: String -> AionBot ()
 debug s = liftIO (putStrLn s)
 
+info :: String -> AionBot ()
+info s = liftIO (putStrLn s)

@@ -37,10 +37,11 @@ sendFixedSzPacket c maxSz p =
     do let buf = encode p
        if BL.length buf > (fromIntegral maxSz)
           then E.throw TooBigPacket
-          else channSend c (pad buf)
+          else channSend c buf
+{-
     where
       pad buf = let diff = (fromIntegral maxSz) - BL.length buf in
-                buf `BL.append` (BL.replicate diff 0)
+                buf `BL.append` (BL.replicate diff 0)-}
 
 readFixedSzPacket :: (MonadIO m, Binary b) => Channel m -> Int -> m b
 readFixedSzPacket c maxSz =

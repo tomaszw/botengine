@@ -7,7 +7,7 @@ Cabal-Version: >= 1.2
 Executable bot
   hs-source-dirs: ../common .
   Main-is: Main.hs             
-  Extensions: ScopedTypeVariables,GeneralizedNewtypeDeriving, GADTs, ExistentialQuantification, MultiParamTypeClasses, RankNTypes, PatternGuards, ForeignFunctionInterface, FlexibleContexts,FlexibleInstances
+  Extensions: ScopedTypeVariables,GeneralizedNewtypeDeriving, GADTs, ExistentialQuantification, MultiParamTypeClasses, RankNTypes, PatternGuards, ForeignFunctionInterface, FlexibleContexts,FlexibleInstances,DeriveDataTypeable
   Build-Depends:
         base >= 3 && < 5,
         mtl,
