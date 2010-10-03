@@ -428,6 +428,7 @@ combatExpirator period =
        combat' <- foldM expire [] (combat_map s)
        liftState . put $ s { combat_map = combat' }
        delay period
+       debug $ "in combat with " ++ show (length combat') ++ " monsters."
        combatExpirator period
     where
       expire :: [CombatMob] -> CombatMob -> AionBot [CombatMob]

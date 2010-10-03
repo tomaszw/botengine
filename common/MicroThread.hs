@@ -17,6 +17,7 @@ import Control.Monad.Prompt
 import Text.Printf
 import Data.List
 import Data.Ord
+import Data.Int
 import System.IO
 
 type ThreadID = Int
@@ -73,9 +74,16 @@ instance MonadMicroThread (MicroThreadT m) where
     invariant hold violated f =
         do s <- get 
            let invs = invariants (current s)
-           -- only add it, don't release -> supposed to be done by runtime
-           modifyCurrentT (\t -> t { invariants = (hold,violated):invs })
-           f
+               id   = maxInvariantID (current s) + 1
+               inv  = Invariant id hold violated
+           trace $ "invariant - acquire " ++ show id
+           modifyCurrentT $ \t ->
+               t { invariants = inv : invs }
+           r <- f
+           trace $ "invariant - casual release " ++ show id
+           modifyCurrentT $ \t ->
+               t { invariants = filter (\i -> inv_id i /= id) (invariants t) }
+           return r
 
     getCurrentThread =
         get >>= \s -> return . threadID . current $ s
@@ -131,13 +139,22 @@ data Thread m = Thread
     {
       contThread :: () -> MicroThreadT m ()
     , contThreadPred :: MicroThreadT m Bool
-    , invariants :: [ (MicroThreadT m Bool, MicroThreadT m ()) ] -- hold condition , what to do when violated
+    , invariants :: [ Invariant m ]
     , scheduled :: Float
     , threadID :: ThreadID
     , finalisers :: [Finaliser m]
     }
 
 type Finaliser m = MicroThreadT m ()
+
+data Invariant m = Invariant
+    {
+      inv_id :: InvariantID
+    , inv_hold :: MicroThreadT m Bool
+    , inv_violation :: MicroThreadT m ()
+    }
+
+type InvariantID = Int64
 
 data Yield m = Delay Float
              | Spark [Thread m]
@@ -146,6 +163,10 @@ data Yield m = Delay Float
              | Die
              | Kill ThreadID
              | Abort
+
+maxInvariantID :: Thread m -> InvariantID
+maxInvariantID t | null (invariants t) = 0
+                 | otherwise = maximum $ map inv_id (invariants t)
 
 instance Show (Yield m) where
     show (Delay f) = printf "delay %2.4f" f
@@ -299,7 +320,7 @@ runner t0 =
                   return Die
           (_,viols) -> -- if invariants don't hold, kill the thread and invoke specified actions in NEW threads
                 do let current_id = threadID thread
-                   trace $ "invariant violation by " ++ show (threadID thread)
+                   trace $ "invariant - violation by thread " ++ show (threadID thread)
                    -- clear invariants for this thread
                    replace current_id $ thread { invariants = [] }
                    -- spark invariant actions
@@ -338,11 +359,12 @@ runner t0 =
         r <- foldM check [] (invariants x)
         return r
         where
-          check acc (hold,violated) =
+          check acc (Invariant id hold violated) =
               do holds <- hold
                  if holds
                     then return acc
-                    else return $ violated : acc
+                    else do trace $ "invariant - violation of " ++ show id
+                            return $ violated : acc
 
 runMicroThreadT :: (Monad m) => (forall a. Request a -> m a) -> MicroThreadT m () -> m ()
 runMicroThreadT req bot =
