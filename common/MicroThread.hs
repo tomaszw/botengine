@@ -24,7 +24,7 @@ type ThreadID = Int
 newtype MicroThreadT m a = MicroThreadT {
       unMicroThreadT :: ContT () (StateT (SystemState m) (PromptT Request m)) a
     }
-    deriving (Monad, MonadState (SystemState m), MonadCont)
+    deriving (Functor, Monad, MonadState (SystemState m), MonadCont)
 
 instance MonadPrompt Request (MicroThreadT m) where
     prompt = MicroThreadT . lift . lift . prompt

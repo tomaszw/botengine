@@ -48,7 +48,7 @@ import Math
 import Keys
 
 newtype AionBot a = AionBot { unBot :: MicroThreadT (StateT BotState IO) a }
-    deriving ( Monad, MonadMicroThread )
+    deriving ( Functor, Monad, MonadMicroThread )
 
 data StrafeDirection = StrafeLeft | StrafeRight
 
@@ -367,7 +367,9 @@ getTarget = getPlayerEntity >>= \p -> getEntity (entity_target_id p)
 getTargetting :: EntityID -> AionBot [Entity]
 getTargetting id =
     do es <- getEntities
-       return $ filter (\e' -> entity_target_id e' == id) es
+       return $ filter (\e' ->    entity_target_id e' == id
+                               && not (isDeadPure e')
+                       ) es
 
 -- all targetting player
 getTargettingMe :: AionBot [Entity]
@@ -378,12 +380,16 @@ updateState :: GameState -> AionBot ()
 updateState gs =
     do cam <- liftIO $ readIORef (game_camera gs)
        ply <- liftIO $ readIORef (game_player gs)
-       ent <- liftIO $ readIORef (game_entities gs)
+       ent <- filter interesting <$> (liftIO $ readIORef (game_entities gs))
        let ent_m = M.fromList $ zip (map entity_id ent) ent
        liftState . modify $ \s -> s { camera = cam
                                     , player = ply
                                     , entities = ent
                                     , entity_map = ent_m }
+    where
+      interesting e | entity_type e == ENPC = True
+                    | entity_type e == EPlayer = True
+                    | otherwise = False
 
 runAionBot :: CommandChannel IO -> GameState -> AionBot () -> IO ()
 runAionBot agent_ch game_state aionbot =
