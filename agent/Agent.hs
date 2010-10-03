@@ -57,8 +57,9 @@ runCommandServer p w =
       loop sock =
           do putStrLn $ "listening..."
              (client,addr) <- accept sock
-
-             updates <- forkIO $ runStateUpdatesSender addr p 20
+             let updates_addr | SockAddrInet _ host_addr <- addr = SockAddrInet port host_addr
+                              | otherwise                        = error "unexpected address"
+             updates <- forkIO $ runStateUpdatesSender updates_addr p 20
              handle (client,addr)
              killThread updates
 
@@ -81,6 +82,7 @@ runStateUpdatesSender :: SockAddr -> WinProcess -> Int -> IO ()
 runStateUpdatesSender addr p delay_ms =
     do sock <- socket AF_INET Datagram defaultProtocol
        ch <-createStateUpdatesChannel sock (Just addr)
+       putStrLn $ "starting state notifications to remote " ++ show addr
        updates ch 0
     where
       updates ch i =
@@ -91,6 +93,8 @@ runStateUpdatesSender addr p delay_ms =
                      ent <- getEntityList p
                      sendCommand ch $ UpdatePlayer ply
                      sendCommand ch $ UpdateEntities ent
+                     putStr "."
+                     hFlush stdout
              threadDelay $ delay_ms * 1000
              updates ch (i+1)
           where

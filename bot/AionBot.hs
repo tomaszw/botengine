@@ -14,13 +14,13 @@ module AionBot ( AionBot, runAionBot
 import Common
 import Data.Binary ( encode )
 import Data.Map (Map)
+import Data.Time
+import Data.Time.Clock
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString as B
 import qualified Data.Map as M
 import Control.Monad.State
-import Control.Monad.Trans
-import System.Time
-import System.IO
+
 import Text.Printf
 import Network.Socket hiding (sendTo, recvFrom)
 import Network.Socket.ByteString (sendTo, recvFrom)
@@ -237,14 +237,15 @@ updateState gs =
 
 runAionBot :: CommandChannel IO -> GameState -> AionBot () -> IO ()
 runAionBot agent_ch game_state aionbot =
-    do let mt = unBot $
+    do t0 <- getCurrentTime
+       let mt = unBot $
                 do -- initial state fetch into monad
                    updateState game_state
                    -- periodic state updates
                    withSpark (stateReader game_state 0.01) $ \_ ->
                              -- rest of botting
                              aionbot
-           state = runMicroThreadT (microThreadIOReqHandler) mt
+           state = runMicroThreadT (ioHandler t0) mt
        evalStateT state s0
   where
     s0 =
@@ -253,6 +254,16 @@ runAionBot agent_ch game_state aionbot =
                   , player = undefined
                   , entities = undefined
                   , entity_map = undefined }
+
+ioHandler :: (MonadIO m) => UTCTime -> Request a -> m a
+ioHandler t0 (ThreadDelay secs) = liftIO . threadDelay $ round (secs * 10^6)
+ioHandler t0 GetCurrentTime = liftIO $ ioDiffTime t0
+ioHandler t0 (Trace msg) = liftIO . putStrLn $ "thread> " ++ msg
+
+ioDiffTime :: UTCTime -> IO Float
+ioDiffTime t0 =
+    do t1 <- getCurrentTime
+       return . realToFrac $ diffUTCTime t1 t0
 
 debug :: String -> AionBot ()
 debug s = liftIO (putStrLn s)

@@ -12,7 +12,7 @@ Executable bot
   Build-Depends:
         base >= 3 && < 5,
         mtl,
-        old-time,
+        time,
         binary,
         data-binary-ieee754,
         containers,

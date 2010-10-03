@@ -9,6 +9,7 @@ import Common
 import qualified Control.Exception as E
 import Data.Binary
 import Data.Typeable
+import Data.Maybe
 import Data.Map (Map)
 import qualified Data.Map as M
 import qualified Data.ByteString as B
@@ -56,18 +57,6 @@ newPacketCounter classify =
     do m <- liftIO $ newMVar (M.empty)
        return $ PacketCounter classify m
 
-getMaxID :: (MonadIO m) => PacketCounter b -> Int -> m Integer
-getMaxID m cls =
-    do mp <- liftIO $ readMVar (pc_counters m)
-       case M.lookup cls mp of
-         Nothing -> return 0
-         Just c  -> return c
-
-setMaxID :: (MonadIO m) => PacketCounter b -> Int -> Integer -> m ()
-setMaxID m cls id =
-    liftIO $ modifyMVar_ (pc_counters m) $ \mp ->
-        return (M.insert cls id mp)
-
 -- reads newer packet from channel (id will be higher), discards older packets
 readCountedPacket :: (Binary b, MonadIO m) => Channel m -> Int -> PacketCounter b -> m b
 readCountedPacket c sz m =
@@ -75,18 +64,22 @@ readCountedPacket c sz m =
        let id  = packet_id packet
            cls = pc_classify m (packet_data packet)
        -- discard packets older than already in queue
-       max <- getMaxID m cls
-       if id < max
-          then readCountedPacket c sz m
-          else do setMaxID m cls id
-                  return $ packet_data packet
+       ok <- liftIO $ modifyMVar (pc_counters m) $ \counters ->
+           do let max = fromMaybe 0 $ M.lookup cls counters
+              if id < max
+                then return (counters, False)
+                else return (M.insert cls id counters, True)
+       case ok of
+         False -> readCountedPacket c sz m
+         True  -> return $ packet_data packet
+
 
 -- assigns ID and sents packet through channel
 sendCountedPacket :: (Binary b, MonadIO m) => Channel m -> Int -> b -> PacketCounter b -> m ()
 sendCountedPacket ch sz p m =
     do let cls = pc_classify m p
        id <- liftIO $ modifyMVar (pc_counters m) $ \counters ->
-           do max <- getMaxID m cls
-              let id = max+1
+           do let max = fromMaybe 0 $ M.lookup cls counters
+                  id  = max+1
               return (M.insert cls id counters, id)
        sendFixedSzPacket ch sz (IdentifablePacket id p)
