@@ -3,6 +3,7 @@ module MicroThread
     , MonadMicroThread (..)
     , Request (..)
     , waitCompletion
+    , waitForever
     , withSpark
     , runMicroThreadT
     ) where
@@ -100,6 +101,9 @@ instance MonadMicroThread (MicroThreadT m) where
 waitCompletion :: (MonadMicroThread m) => ThreadID -> m ()
 waitCompletion id = wait (isThreadAlive id >>= return . not)
 
+waitForever :: (MonadMicroThread m) => m ()
+waitForever = wait ( return False )
+    
 withSpark :: (MonadMicroThread m) => m () -> (ThreadID -> m a) -> m a
 withSpark thread f =
     do new_id <- spark thread

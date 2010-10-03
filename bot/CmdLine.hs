@@ -3,13 +3,13 @@ module CmdLine ( runCmdLine ) where
 import Common
 import Text.Printf
 
-import MicroThread ( time )
+import MicroThread
 import AionBot
 import GameState
 import RemoteCommand
 
 data Cmd = Quit | NextTarget | AimTarget | WalkTarget | TargetInfo | PlayerInfo | EntitiesInfo | ParkMouse
-         | Rotate Float
+         | Rotate Float | Forward Float
 
 execCmd :: Cmd -> AionBot ()
 execCmd cmd = 
@@ -26,6 +26,7 @@ execCmd' EntitiesInfo = getEntities >>= \e -> liftIO $ mapM_ (putStrLn . show) e
 execCmd' WalkTarget = walkToTarget 10
 execCmd' NextTarget = nextTarget
 execCmd' ParkMouse = parkMouse
+execCmd' (Forward secs) = timeout secs $ walk
 execCmd' (Rotate a) = rotateCamera a
 execCmd' _ = error "bad command"
 
@@ -41,6 +42,10 @@ parseCmd cmd =
       ["wt"] -> Just WalkTarget
       ["n"] -> Just NextTarget
       ["park"] -> Just ParkMouse
+      ["forward", secs_str] ->
+          case reads secs_str of
+            [(secs,_)] -> Just $ Forward secs
+            _ -> Nothing
       ["rot", v] ->
           case reads v of
             [(f,_)] -> Just $ Rotate f

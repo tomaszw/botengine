@@ -7,6 +7,7 @@ module AionBot ( AionBot, runAionBot
                , getEntities
                , aimTarget
                , nextTarget
+               , walk
                , walkToTarget
                , rotateCamera
                ) where
@@ -151,6 +152,13 @@ nextTarget =
 
 finishWalkThreshold :: Float
 finishWalkThreshold = 10
+
+-- walk forward
+walk :: AionBot ()
+walk =
+    do sendKey Down keyForward
+       finally (sendKey Up keyForward) $
+               waitForever
 
 -- walk up to given point
 walkTo :: Float -> Vec3 -> AionBot ()
