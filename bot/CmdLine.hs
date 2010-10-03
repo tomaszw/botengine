@@ -121,18 +121,9 @@ backgroundJobAbort state =
        case bg of
          Nothing   -> return ()
          Just task ->
-             do finish <- tryTakeMVar (finished task)
-                case finish of
-                  Just _  -> return () -- already finished
-                  Nothing ->
-                      do putStr "aborting task... "
-                         hFlush stdout
-                         abortTask task
-                         takeMVar (finished task)
-                         writeIORef (background state) Nothing
-                         putStrLn "DONE"
-                         -- for kicks
-                         putMVar (finished task) ()
+             do abortTask task
+                takeMVar (finished task)
+                writeIORef (background state) Nothing
 
 
 
