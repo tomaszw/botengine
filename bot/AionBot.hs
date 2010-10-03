@@ -107,44 +107,6 @@ rotateCamera delta =
        liftIO $ sendCommand ch (OrientCamera t_r)
        -- wait until rotation matches
        timeout 2.0 (waitToRotateCamera t_r)
-{-
--- rotate camera by given amount
-rotateCamera :: Float -> AionBot ()
-rotateCamera delta =
-    -- shouldn't be taking more than few secs
-    do timeout 2.0 $
-               do parkMouse
-                  sendMouseBtn C.Down C.R
-                  finally (sendMouseBtn C.Up C.R) $ do
-                    delay 0.15
-                    c <- getCamera
-                    -- target rotation angle
-                    let t_r = snap $ camera_rot c + delta
-                    rotate (camera_rot c) t_r
-       delay 0.1
-       return ()
-    where
-      epsilon = 2
-      rotate r0 t_r
-          | abs (t_r - r0) < epsilon = return () -- hooray rotated
-          | otherwise =
-              do let diff_a = max t_r r0 - min t_r r0
-                     diff_b = 360 - diff_a
-                     d =
-                         case () of
-                           _ | r0 >= t_r, diff_a <= diff_b -> -diff_a
-                             | r0 >= t_r, diff_a >  diff_b ->  diff_b
-                             | r0 <  t_r, diff_a <= diff_b ->  diff_a
-                             | otherwise                   -> -diff_b
-                     speed = min 20 . max 2 $ (abs d / 5) ** 1.5 -- nice smooth function for rotation speed; lower when nearing target rotation
-                     dx = speed * (- (signum d))
-                 -- debug $ printf "tr=%f r=%f dx=%f d=%f" t_r r0 dx d
-                 sendMouseMoveFast (round dx) 0
-                 -- delay and fetch new camera orientation from game, then continue with rotation
-                 delay 0.1
-                 c <- getCamera
-                 rotate (camera_rot c) t_r
--}
     
 -- aim given direction
 aimDirection :: Vec3 -> AionBot ()
@@ -279,9 +241,9 @@ runAionBot agent_ch game_state aionbot =
                 do -- initial state fetch into monad
                    updateState game_state
                    -- periodic state updates
-                   spark $ stateReader game_state 0.01
-                   -- rest of botting
-                   aionbot
+                   withSpark (stateReader game_state 0.01) $ \_ ->
+                             -- rest of botting
+                             aionbot
            state = runMicroThreadT (microThreadIOReqHandler) mt
        evalStateT state s0
   where

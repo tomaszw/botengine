@@ -33,10 +33,12 @@ runUpdatesServer port state =
            do sock <- socket AF_INET Datagram defaultProtocol
               bindSocket sock ( SockAddrInet port iNADDR_ANY )
               chann <- createStateUpdatesChannel sock Nothing
+              putStrLn $ "receiving updates on port " ++ show port
               parse chann
     where
       parse ch =
           do c <- readCommand ch
+             liftIO $ putStr "." >> hFlush stdout
              updateGameState c state
              parse ch
 
