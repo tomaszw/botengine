@@ -245,8 +245,12 @@ killTarget =
       kill Nothing  = return ()
       kill (Just t) =
           do attackTarget
-             wait (isDead . entity_id $ t)
-             info $ "victory, " ++ entity_name t ++ " DIED!"
+             withSpark rotate_skills $ \_ ->
+                 do wait (isDead . entity_id $ t)
+                    info $ "victory, " ++ entity_name t ++ " DIED!"
+      rotate_skills =
+          do c <- getConfig
+             execute (combat_rotation c)
 
 ----
 ---- Bot state
@@ -387,6 +391,10 @@ getTargetting id =
 -- all targetting player
 getTargettingMe :: AionBot [Entity]
 getTargettingMe = getPlayer >>= \p -> getTargetting (player_id p)
+
+-- access bot configuration
+getConfig :: AionBot AionBotConfig
+getConfig = liftState get >>= return . config
 
 -- fetch complete state from game
 updateState :: GameState -> AionBot ()
