@@ -36,12 +36,13 @@ class (Monad m) => MonadMicroThread m where
     delay :: Float -> m ()
     spark :: m () -> m ThreadID
     terminate :: ThreadID -> m ()
+    abort :: m ()
     wait :: m Bool -> m ()
     time :: m Float
     timeout :: Float -> m () -> m ()
     invariant :: m Bool -> m () -> m a -> m a
     finally :: m () -> m a -> m a
-    currentThreadID :: m ThreadID
+    getCurrentThread :: m ThreadID
     isThreadAlive :: ThreadID -> m Bool
 
 instance MonadMicroThread (MicroThreadT m) where
@@ -76,7 +77,7 @@ instance MonadMicroThread (MicroThreadT m) where
            modifyCurrentT (\t -> t { invariants = (hold,violated):invs })
            f
 
-    currentThreadID =
+    getCurrentThread =
         get >>= \s -> return . threadID . current $ s
 
     time = prompt GetCurrentTime
@@ -97,6 +98,15 @@ instance MonadMicroThread (MicroThreadT m) where
                      let testTimeout = time >>= \t -> return $ t - t0 < max_t
                      invariant testTimeout (return ()) f
             waitCompletion id
+
+    -- destroys all threads
+    abort =
+        do s <- get
+           current <- getCurrentThread
+           let all_ids = filter (\id -> id /= current) $ map threadID (threads s)
+           mapM_ terminate all_ids
+           -- sepuku
+           terminate current
 
 waitCompletion :: (MonadMicroThread m) => ThreadID -> m ()
 waitCompletion id = wait (isThreadAlive id >>= return . not)

@@ -8,8 +8,9 @@ import AionBot
 import GameState
 import RemoteCommand
 
-data Cmd = Quit | NextTarget | AimTarget | WalkTarget | TargetInfo | PlayerInfo | EntitiesInfo | ParkMouse
-         | Rotate Float | Forward Float
+data Cmd = Abort | Quit | NextTarget | AimTarget | WalkTarget | TargetInfo | PlayerInfo | EntitiesInfo | ParkMouse
+         | Rotate Float | Forward Float | Jump
+         | Strafe StrafeDirection
 
 execCmd :: Cmd -> AionBot ()
 execCmd cmd = 
@@ -26,6 +27,8 @@ execCmd' EntitiesInfo = getEntities >>= \e -> liftIO $ mapM_ (putStrLn . show) e
 execCmd' WalkTarget = walkToTarget 10
 execCmd' NextTarget = nextTarget
 execCmd' ParkMouse = parkMouse
+execCmd' (Strafe d) = strafe d
+execCmd' Jump = jump
 execCmd' (Forward secs) = timeout secs $ walk
 execCmd' (Rotate a) = rotateCamera a
 execCmd' _ = error "bad command"
@@ -34,6 +37,7 @@ parseCmd :: String -> Maybe Cmd
 parseCmd cmd =
     let cmds = splitOn " " cmd in
     case cmds of
+      [] -> Just Abort
       ["q"] -> Just Quit
       ["aim"] -> Just AimTarget
       ["p"] -> Just PlayerInfo
@@ -42,6 +46,9 @@ parseCmd cmd =
       ["wt"] -> Just WalkTarget
       ["n"] -> Just NextTarget
       ["park"] -> Just ParkMouse
+      ["j"] -> Just Jump
+      ["l"] -> Just (Strafe StrafeLeft)
+      ["r"] -> Just (Strafe StrafeRight)
       ["forward", secs_str] ->
           case reads secs_str of
             [(secs,_)] -> Just $ Forward secs
@@ -53,15 +60,68 @@ parseCmd cmd =
 
       _ -> Nothing
 
+data Task = Task { abortTask :: IO ()
+                 , finished  :: MVar ()
+                 , threadID  :: ThreadId }
+
+data CmdState = CmdState { game_state :: GameState
+                         , channel :: CommandChannel IO
+                         , background :: IORef (Maybe Task) }
+
 runCmdLine :: GameState -> CommandChannel IO -> IO ()
-runCmdLine gs c =
+runCmdLine gs ch =
+    do bg <- newIORef Nothing
+       let state = CmdState { game_state = gs
+                            , channel = ch
+                            , background = bg }
+       runCmdLine' state
+
+runCmdLine' :: CmdState -> IO ()
+runCmdLine' cmd_state =
+    do quit <- cmdLine cmd_state
+       case quit of
+         True  -> putStrLn "quitting command line." >> return ()
+         False -> runCmdLine' cmd_state
+
+cmdLine :: CmdState -> IO Bool
+cmdLine state =
     do putStr ">> "
        hFlush stdout
-       cmd <- parseCmd <$> getLine
+       line <- getLine
+       let gs  = game_state state
+           c   = channel state
+           cmd = parseCmd line
        case cmd of
-         Nothing   -> putStrLn "invalid command." >> hFlush stdout >> runCmdLine gs c
-         Just Quit -> return ()
-         Just PlayerInfo -> runAionBot c gs (execCmd PlayerInfo) >> runCmdLine gs c
-         Just TargetInfo -> runAionBot c gs (execCmd TargetInfo) >> runCmdLine gs c
-         Just EntitiesInfo -> runAionBot c gs (execCmd EntitiesInfo) >> runCmdLine gs c
-         Just cmd -> runAionBot c gs (execCmd cmd) >> runCmdLine gs c
+         Nothing   -> putStrLn "invalid command." >> hFlush stdout >> return False
+         Just Quit -> return True
+         Just Abort -> backgroundJobAbort state >> return False
+         Just PlayerInfo -> runAionBot c gs (execCmd PlayerInfo) >> return False
+         Just TargetInfo -> runAionBot c gs (execCmd TargetInfo) >> return False
+         Just EntitiesInfo -> runAionBot c gs (execCmd EntitiesInfo) >> return False
+         Just cmd -> backgroundJob state (execCmd cmd) >> return False
+
+backgroundJob :: CmdState -> AionBot () -> IO ()
+backgroundJob state action =
+    do backgroundJobAbort state -- abort previous if any
+       (id, abort_fun, finished_var) <- runAbortableAionBot (channel state) (game_state state) action
+       writeIORef (background state) $ 
+                  Just $ Task { abortTask = abort_fun
+                              , finished  = finished_var
+                              , threadID  = id }
+
+backgroundJobAbort :: CmdState -> IO ()
+backgroundJobAbort state =
+    do bg <- readIORef (background state)
+       case bg of
+         Nothing   -> return ()
+         Just task ->
+             do putStr "aborting task... "
+                hFlush stdout
+                abortTask task
+                takeMVar (finished task)
+                writeIORef (background state) Nothing
+                putStrLn "DONE"
+
+
+
+

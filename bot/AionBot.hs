@@ -1,5 +1,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving, GADTs, ExistentialQuantification, MultiParamTypeClasses, RankNTypes #-}
-module AionBot ( AionBot, runAionBot
+module AionBot ( AionBot
+               , runAionBot
+               , runAbortableAionBot
                , parkMouse
                , getPlayer
                , getPlayerEntity
@@ -7,7 +9,10 @@ module AionBot ( AionBot, runAionBot
                , getEntities
                , aimTarget
                , nextTarget
+               , StrafeDirection (..)
+               , strafe
                , walk
+               , jump
                , walkToTarget
                , rotateCamera
                ) where
@@ -36,6 +41,8 @@ import Keys
 newtype AionBot a = AionBot { unBot :: MicroThreadT (StateT BotState IO) a }
     deriving ( Monad, MonadMicroThread )
 
+data StrafeDirection = StrafeLeft | StrafeRight
+
 instance MonadIO AionBot where
     liftIO = AionBot . lift . lift
 
@@ -50,12 +57,10 @@ getChannel =
 ----
 ---- Wrappers around some comm channel functions so we don't have to pass channel everywhere
 ----
-setMousePos x y = getChannel >>= \c -> liftIO $ sendCommand c $ AbsMoveMousePerc x y
-sendKey state code = getChannel >>= \c -> liftIO $ sendCommand c $ ChangeKeyState state code
-sendKeyPress code = getChannel >>= \c -> liftIO $ sendCommand c (ChangeKeyState Down code) >> sendCommand c (ChangeKeyState Up code)
-sendMouseBtn state btn = getChannel >>= \c -> liftIO $ sendCommand c (ChangeMouseState state btn)
-sendMouseClick btn = getChannel >>= \c -> liftIO $ sendCommand c (ChangeMouseState Down btn)>> sendCommand c (ChangeMouseState Up btn)
-sendMouseMove dx dy = getChannel >>= \c -> liftIO $ sendCommand c (RelMoveMouse dx dy)
+click btn = getChannel >>= \c -> liftIO $ sendCommand c (ChangeMouseState Down btn)>> sendCommand c (ChangeMouseState Up btn)
+mouseTo x y = getChannel >>= \c -> liftIO $ sendCommand c $ AbsMoveMousePerc x y
+keyState state code = getChannel >>= \c -> liftIO $ sendCommand c $ ChangeKeyState state code
+keyPress code = getChannel >>= \c -> liftIO $ sendCommand c (ChangeKeyState Down code) >> sendCommand c (ChangeKeyState Up code)
 
 ----
 ---- Control Commands
@@ -63,10 +68,10 @@ sendMouseMove dx dy = getChannel >>= \c -> liftIO $ sendCommand c (RelMoveMouse 
 
 -- place mouse in safe spot for performing clicks (no mobs, no ui elements)
 parkMouse :: AionBot ()
-parkMouse = centerMouse -- setMousePos 0.33 0.1 >> delay 0.1
+parkMouse = centerMouse -- mouseTo 0.33 0.1 >> delay 0.1
 
 centerMouse :: AionBot ()
-centerMouse = setMousePos 50 50 >> delay 0.1
+centerMouse = mouseTo 50 50 >> delay 0.1
 
 -- camera rotation value best matching a direction
 rotationOfDir :: Vec3 -> Float
@@ -140,7 +145,7 @@ aimTarget =
 nextTarget :: AionBot ()
 nextTarget =
     do t <- getTarget
-       sendKeyPress keyNextTarget
+       keyPress keyNextTarget
        timeout 2 (next t)
        return ()
   where
@@ -153,11 +158,28 @@ nextTarget =
 finishWalkThreshold :: Float
 finishWalkThreshold = 10
 
+--
+strafe :: StrafeDirection -> AionBot()
+strafe d =
+    do keyState Down key
+       finally (keyState Up key) $
+               waitForever
+    where
+      key = case d of
+              StrafeLeft  -> keyStrafeLeft
+              StrafeRight -> keyStrafeRight
+              
+--
+jump :: AionBot ()
+jump = keyPress keyJump
+
+--
+
 -- walk forward
 walk :: AionBot ()
 walk =
-    do sendKey Down keyForward
-       finally (sendKey Up keyForward) $
+    do keyState Down keyForward
+       finally (keyState Up keyForward) $
                waitForever
 
 -- walk up to given point
@@ -168,13 +190,13 @@ walkTo maxtime p =
           True  -> return ()
           False -> do aimPoint p
                       withSpark keepAim $ \_ ->
-                          do sendKey Down keyForward
+                          do keyState Down keyForward
                              timeout maxtime walk
-                             sendKey Up keyForward
+                             keyState Up keyForward
   where
     walk = finished >>= \f ->
            case f of
-             True  -> sendKey Up keyForward >> info "TARGET REACHED!"
+             True  -> keyState Up keyForward >> info "TARGET REACHED!"
              False -> delay 0.25 >> walk
     keepAim = aimPoint p >> keepAim
     finished = getPlayer >>= \ply ->
@@ -263,10 +285,34 @@ runAionBot agent_ch game_state aionbot =
                   , entities = undefined
                   , entity_map = undefined }
 
+-- forks it in background
+runAbortableAionBot :: CommandChannel IO -> GameState -> AionBot () -> IO (ThreadId, IO (), MVar ())
+runAbortableAionBot agent_ch game_state action =
+    do abort_var <- newEmptyMVar
+       abort_fun_var <- newEmptyMVar
+       finished_var <- newEmptyMVar
+       id <- forkIO $ do
+               runAionBot agent_ch game_state $ do
+                        spark (aborter abort_var)
+                        action
+               putMVar finished_var ()
+       return $ (id, abort_fun abort_var, finished_var)
+    where
+      aborter var =
+          do empty <- liftIO $ isEmptyMVar var
+             when (not empty) $
+                  abort
+             delay 0.1
+             aborter var
+      abort_fun var =
+          do tryPutMVar var ()
+             return ()
+
 ioHandler :: (MonadIO m) => UTCTime -> Request a -> m a
 ioHandler t0 (ThreadDelay secs) = liftIO . threadDelay $ round (secs * 10^6)
 ioHandler t0 GetCurrentTime = liftIO $ ioDiffTime t0
-ioHandler t0 (Trace msg) = liftIO . putStrLn $ "thread> " ++ msg
+--ioHandler t0 (Trace msg) = liftIO . putStrLn $ "thread> " ++ msg
+ioHandler t0 (Trace msg) = return ()
 
 ioDiffTime :: UTCTime -> IO Float
 ioDiffTime t0 =
