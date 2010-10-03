@@ -38,7 +38,6 @@ runUpdatesServer port state =
     where
       parse ch =
           do c <- readCommand ch
-             liftIO $ putStr "." >> hFlush stdout
              updateGameState c state
              parse ch
 

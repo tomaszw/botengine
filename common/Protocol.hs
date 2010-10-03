@@ -15,7 +15,10 @@ import qualified Data.Map as M
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 
+import Debug.Trace
+
 import Channel
+
 
 data IdentifablePacket a = IdentifablePacket { packet_id :: Integer
                                              , packet_data :: a }
