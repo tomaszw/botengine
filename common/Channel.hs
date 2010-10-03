@@ -1,7 +1,8 @@
-module Comm ( Channel
+module Channel ( Channel
             , KeyState(..), Button(..), KeyCode
             , Command (..), commCode, commFromCode
             , channelFromSocket
+            , channelFromUDPSocket
             , getModuleHandle
             , getGameWindow
             , getForegroundWindow
@@ -18,25 +19,19 @@ module Comm ( Channel
             , recvCamera
             ) where
 
-import Network.Socket ( Socket )
+import Common
+
+import Network.Socket ( Socket, SockAddr )
 import qualified Network.Socket.ByteString as NBS
-import qualified Data.ByteString as StrictBs
+import qualified Data.ByteString as B
 import Network.Socket.ByteString.Lazy ( recv )
-import Data.Word
-import Data.Int
-import Data.List
-import Data.Bits
 import Data.ByteString.Lazy (ByteString, pack, unpack)
-import qualified Data.ByteString.Lazy as Bs
-import Control.Monad
-import Control.Monad.Trans
-import Control.Applicative
+import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.UTF8 as UTF8
 import Data.Binary ( Binary(..), Get(..), Put(..), encode, decode )
+import qualified Data.Map as M
 import Foreign.Storable
 import Foreign.C.Types
-import Debug.Trace
-import System.IO.Unsafe
 
 import Aion
 
@@ -47,25 +42,81 @@ channelFromSocket :: (MonadIO m) => Socket -> Channel m
 channelFromSocket s = Channel { channSend = \buf -> liftIO $ fromIntegral <$> (lazy_send s buf)
                               , channRecv = \sz  -> liftIO (recv s (fromIntegral sz)) }
 
+channelFromUDPSocket :: (MonadIO m) => Socket -> SockAddr -> Channel m
+channelFromUDPSocket s addr =
+    Channel { channSend = udp_send
+            , channRecv = udp_recv }
+    where
+      udp_send buf = liftIO $ NBS.sendTo s (unLazy buf) addr
+      udp_recv sz  = liftIO $ do (buf,addr') <- NBS.recvFrom s sz
+                                 return $ toLazy buf
+      unLazy   = B.concat . BL.toChunks
+      toLazy s = BL.fromChunks [s]
+
+data Command = GetModuleHandle
+         | ReadProcessMemory
+         | SendKey
+         | SendMouse
+         | SendMouseMove
+         | SetMousePos
+         | SetPlayerRot
+         | GetForegroundWindow
+         | SetForegroundWindow
+         | GetGameWindow
+         | GetCamera
+         | GetPlayer
+         | GetEntityList
+           deriving (Eq, Ord, Show)
+
+commCodes = [ (GetModuleHandle, 1)
+            , (ReadProcessMemory, 2)
+            , (SendKey, 3)
+            , (SetMousePos, 4)
+            , (SetPlayerRot, 5)
+            , (SetMousePos, 6)
+            , (GetForegroundWindow, 7)
+            , (SetForegroundWindow, 8)
+            , (GetGameWindow, 9)
+            , (GetCamera, 10)
+            , (GetPlayer, 11)
+            , (GetEntityList, 12)
+            , (SendMouseMove, 13)
+            ]
+
+commCode :: Command -> Word8
+commCode =
+    let m = M.fromList commCodes in
+    \cmd ->
+        let Just v = M.lookup cmd m in
+        v
+
+commFromCode :: Word8 -> Command
+commFromCode =
+    let m = M.fromList codes'
+        codes' = map (\(a,b) -> (b,a)) commCodes in
+    \code ->
+        let Just v = M.lookup code m in
+        v
+
 lazy_send s b =
-    let b' = foldl' StrictBs.append StrictBs.empty (Bs.toChunks b) in
+    let b' = foldl' B.append B.empty (BL.toChunks b) in
     NBS.send s b'
 
 channSendA :: (Monad m) => Channel m -> ByteString -> m ()
 channSendA c buf =
     do num <- channSend c buf
-       let l = fromIntegral (Bs.length buf)
+       let l = fromIntegral (BL.length buf)
        when (num < l) $ 
-            do let xs = Bs.drop (fromIntegral num) buf
+            do let xs = BL.drop (fromIntegral num) buf
                channSendA c xs
 
 channRecvA :: (Monad m) => Channel m -> Int -> m ByteString
 channRecvA c sz =
     do xs <- channRecv c sz
-       let l = fromIntegral $ Bs.length xs
+       let l = fromIntegral $ BL.length xs
        if l < sz && l > 0
           then do ys <- channRecvA c (sz - l)
-                  return $ Bs.append xs ys
+                  return $ BL.append xs ys
           else if l == 0
                   then error "EOF"
                   else return xs
@@ -124,48 +175,6 @@ instance Binary Button where
     put R = put (1 :: Word8)
     get = do c <- get :: Get Word8
              case c of { 0 -> return L; 1 -> return R }
-
-data Command = GetModuleHandle
-         | ReadProcessMemory
-         | SendKey
-         | SendMouse
-         | SendMouseMove
-         | SetMousePos
-         | GetForegroundWindow
-         | SetForegroundWindow
-         | GetGameWindow
-         | GetCamera
-         | GetPlayer
-         | GetEntityList
-           deriving (Eq, Show)
-
-commCode :: Command -> Word8
-commCode GetModuleHandle = 1
-commCode ReadProcessMemory = 2
-commCode SendKey = 3
-commCode SendMouse = 4
-commCode SetMousePos = 6
-commCode GetForegroundWindow = 7
-commCode SetForegroundWindow = 8
-commCode GetGameWindow = 9
-commCode GetCamera = 10
-commCode GetPlayer = 11
-commCode GetEntityList = 12
-commCode SendMouseMove = 13
-
-commFromCode :: Word8 -> Command
-commFromCode 1 = GetModuleHandle
-commFromCode 2 = ReadProcessMemory
-commFromCode 3 = SendKey
-commFromCode 4 = SendMouse
-commFromCode 6 = SetMousePos
-commFromCode 7 = GetForegroundWindow
-commFromCode 8 = SetForegroundWindow
-commFromCode 9 = GetGameWindow
-commFromCode 10 = GetCamera
-commFromCode 11 = GetPlayer
-commFromCode 12 = GetEntityList
-commFromCode 13 = SendMouseMove
 
 sendString :: (Monad m) => Channel m -> String -> m ()
 sendString c s =

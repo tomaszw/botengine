@@ -6,7 +6,7 @@ import Control.Concurrent
 import Network.Socket
 import System.IO
 
-import Comm
+import Channel
 import Aion
 import Packet
 import GameState

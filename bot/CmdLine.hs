@@ -1,18 +1,11 @@
 module CmdLine ( runCmdLine ) where
 
-import Data.List
-import Data.List.Split
-import Control.Concurrent
-import Control.Monad
-import Control.Monad.Trans
-import Control.Applicative
+import Common
 import Text.Printf
-
-import System.IO
 
 import AionBot
 import MicroThread
-import Comm
+import Channel
 import GameState
 
 data Cmd = Quit | NextTarget | AimTarget | WalkTarget | TargetInfo | PlayerInfo | EntitiesInfo | ParkMouse

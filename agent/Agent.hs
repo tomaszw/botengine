@@ -84,7 +84,6 @@ conversation p hwnd c =
              winsetForegroundWindow h
       handle GetGameWindow =
           do channSendA c ( encode $ ptrToWord32 hwnd )
-
       handle GetCamera =
           do cam <- encode <$> getCamera p
              channSendA c (encode $ len32 cam)

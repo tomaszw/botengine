@@ -16,16 +16,12 @@ module AionBot ( AionBot, runAionBot
                , rotateCamera
                ) where
 
-import Data.List
-import Data.Ord
-import Data.IORef
+import Common
 import Data.Binary ( encode )
 import Data.Map (Map)
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString as B
 import qualified Data.Map as M
-import Control.Concurrent
-import Control.Monad
 import Control.Monad.State
 import Control.Monad.Trans
 import System.Time
@@ -37,8 +33,8 @@ import Network.Socket.ByteString (sendTo, recvFrom)
 import GameState
 import MicroThread
 import Aion hiding (getCamera)
-import Comm ( Channel )
-import qualified Comm as C
+import Channel ( Channel )
+import qualified Channel as C
 import Math
 import Keys
 
@@ -118,12 +114,12 @@ rotateCamera delta =
                do parkMouse
                   sendMouseBtn C.Down C.R
                   finally (sendMouseBtn C.Up C.R) $ do
-                    delay 0.05
+                    delay 0.15
                     c <- getCamera
                     -- target rotation angle
                     let t_r = snap $ camera_rot c + delta
                     rotate (camera_rot c) t_r
-       delay 0.05
+       delay 0.1
        return ()
     where
       epsilon = 2
