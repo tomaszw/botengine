@@ -39,6 +39,7 @@ import Math
 import Keys
 
 import Packet
+import RemoteCommand
 
 newtype AionBot a = AionBot { unBot :: MicroThreadT (StateT BotState IO) a }
     deriving ( Monad, MonadMicroThread )
