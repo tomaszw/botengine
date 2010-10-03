@@ -1,15 +1,12 @@
 module Main where
 
-import Control.Applicative
-import Control.Concurrent
-import Control.Monad
-import Control.Monad.Trans
+import Common
 import qualified Control.Exception as E
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
-import Network.Socket hiding ( recvFrom, sendTo )
-import Network.Socket.ByteString ( recvFrom, sendTo )
-import System.IO
+import Data.Time
+import Data.Time.Clock
+import Network.Socket
 import Data.Binary
 import Foreign.C.String
 import Foreign.C.Types
@@ -17,11 +14,10 @@ import Foreign
 import Graphics.Win32 ( HWND )
 import qualified Graphics.Win32 as Win32
 
-import Comm
 import Aion
 import Process
 import WinProcess
-import Packet
+import RemoteCommand
 
 foreign import ccall "find_window" c_find_window :: CString -> IO HWND
 foreign import ccall "mouse_set_cursor_pos_perc" c_mouse_set_cursor_pos_perc :: HWND -> CDouble -> CDouble -> IO ()
@@ -32,158 +28,180 @@ foreign import ccall "mousebutton_up" c_mousebutton_up :: CInt -> IO ()
 foreign import ccall "mouse_move" c_mouse_move :: CInt -> CInt -> IO ()
 foreign import stdcall "SetForegroundWindow" winsetForegroundWindow :: HWND -> IO ()
 
+port :: PortNumber
 port = 5555
 
-len32 :: BL.ByteString -> Word32
-len32 s = fromIntegral (BL.length s)
-
-ptrToWord32 :: Ptr a -> Word32
-ptrToWord32 p = fromIntegral $ p `minusPtr` nullPtr
-
-word32ToPtr :: Word32 -> Ptr a
-word32ToPtr w = nullPtr `plusPtr` (fromIntegral w)
-
-conversation :: WinProcess -> HWND -> Channel IO -> IO ()
-conversation p hwnd c = 
-    do code <- channRecvBinary' c 1
-       let cmd = commFromCode code
-       handle cmd
-       conversation p hwnd c
-    where
-      handle SetMousePos =
-          do x <- channRecvBinary' c 4 :: IO Word32
-             y <- channRecvBinary' c 4 :: IO Word32
-             let x' = fromIntegral x / 100.0
-                 y' = fromIntegral y / 100.0
-             c_mouse_set_cursor_pos_perc hwnd x' y'
-             return ()
-      handle SendKey =
-          do state <- channRecvBinary' c 1 :: IO KeyState
-             key <- channRecvBinary' c 4 :: IO KeyCode
-             case state of
-               Down -> c_key_down $ fromIntegral key
-               Up -> c_key_up $ fromIntegral key
-      handle SendMouse =
-          do state <- channRecvBinary' c 1
-             btn <- channRecvBinary' c 1
-             case (state,btn) of
-               (Down,L) -> c_mousebutton_down 0
-               (Up,L) -> c_mousebutton_up 0
-               (Down,R) -> c_mousebutton_down 1
-               (Up,R) -> c_mousebutton_up 1
-      handle SendMouseMove =
-          do x <- channRecvBinary' c 4 :: IO Word32
-             y <- channRecvBinary' c 4 :: IO Word32
-             c_mouse_move (fromIntegral x) (fromIntegral y)
-      handle GetForegroundWindow =
-          do h <- Win32.getForegroundWindow
-             channSendBinary c ( ptrToWord32 h )
-      handle SetForegroundWindow =
-          do ptr <- channRecvBinary' c 4
-             let h = word32ToPtr ptr
-             winsetForegroundWindow h
-      handle GetGameWindow =
-          do channSendA c ( encode $ ptrToWord32 hwnd )
-      handle GetCamera =
-          do cam <- encode <$> getCamera p
-             channSendA c (encode $ len32 cam)
-             channSendA c cam
-      handle GetPlayer =
-          do ply <- encode <$> getPlayerData p
-             channSendA c (encode $ len32 ply)
-             channSendA c ply
-      handle GetEntityList =
-          do ents <- getEntityList p
-             channSendA c (encode $ (fromIntegral (length ents) :: Word32))
-             mapM_ sendEnt ents
-             where
-               sendEnt e = do let ent = encode e
-                              channSendA c (encode $ len32 ent)
-                              channSendA c ent
-
-      handle c = error $ "unknown command " ++ show c
-
-mkCameraPacket :: Counter -> WinProcess -> IO Packet
-mkCameraPacket c proc =
-    getCamera proc >>= \cam -> newPacketUsingCounter c (UpdateCamera cam)
-
-mkPlayerPacket :: Counter -> WinProcess -> IO Packet
-mkPlayerPacket c proc =
-    getPlayerData proc >>= \ply -> newPacketUsingCounter c (UpdatePlayer ply)
-
-mkEntitiesPacket :: Counter -> WinProcess -> IO Packet
-mkEntitiesPacket c proc =
-    getEntityList proc >>= \ents -> newPacketUsingCounter c (UpdateEntityList ents)
-    
-runStateSender :: WinProcess -> Int -> IO ()
-runStateSender p delay_ms =
-    do sock <- socket AF_INET Datagram defaultProtocol
-       a <- inet_addr "192.168.1.5"
-       let addr = SockAddrInet 5555 a
-       cnt_cam <- newCounter
-       cnt_ply <- newCounter
-       cnt_ent <- newCounter
-       updates sock addr cnt_cam cnt_ply cnt_ent 0
-    where
-      updates sock addr cnt_cam cnt_ply cnt_ent i =
-          do cam <- encode <$> mkCameraPacket cnt_cam p
-             sendTo sock (conv cam) addr
-             when big $
-                  do ply  <- encode <$> mkPlayerPacket cnt_ply p
-                     ents <- encode <$> mkEntitiesPacket cnt_ent p
-                     sendTo sock (conv ply) addr
-                     sendTo sock (conv ents) addr
-                     return ()
-             threadDelay $ delay_ms * 1000
-             updates sock addr cnt_cam cnt_ply cnt_ent (i+1)
-          where
-            big = i `mod` 10 == 0
-            conv s = B.concat . BL.toChunks $ s
-
-commandServer :: WinProcess -> HWND -> IO ()
-commandServer p w =
-    do sock <- socket AF_INET Stream defaultProtocol
-       bindSocket sock (SockAddrInet port iNADDR_ANY)
-       listen sock 1
-       putStrLn "listening.."
-       loop sock
-    where
-      loop sock = do (client,addr) <- accept sock
-                     putStrLn $ "client connected from " ++ show addr
-                     conversation p w (channelFromSocket client) `E.catch` err client
-                     disconnect
-          where
-            err :: Socket -> E.SomeException -> IO ()
-            err c e = putStrLn (show e) >> (E.try (sClose c) :: IO (Either E.SomeException ())) >> disconnect
-            disconnect = putStrLn "client disconnected." >> loop sock
-
-handlePacket :: Packet -> IO ()
-handlePacket p =
-    case packet_data p of
-      MoveMouse dx dy -> c_mouse_move (fromIntegral dx) (fromIntegral dy)
-      _ -> return ()
-
-serviceSocket :: Socket -> IO ()
-serviceSocket sock =
-    do packets <- receivePackets sock
-       mapM_ (handlePacket) packets
-       serviceSocket sock
-
-runUdpServer ::IO ()
-runUdpServer =
-    do recvSock <- socket AF_INET Datagram defaultProtocol
-       bindSocket recvSock (SockAddrInet port iNADDR_ANY)
-       forkIO $ serviceSocket recvSock
-       return ()
-
+windowName :: String
 windowName = "AION Client"
 
 main :: IO ()
 main = do hSetBuffering stdout LineBuffering
           p <- openGameProcess windowName
           w <- withCString windowName $ \s -> c_find_window s
-          withSocketsDo $ do
-            forkIO $ runStateSender p 20
-            forkIO $ runUdpServer
-            commandServer p w
+          withSocketsDo $
+            runCommandServer p w
           return ()
+
+runCommandServer :: WinProcess -> HWND -> IO ()
+runCommandServer p w =
+    do sock <- socket AF_INET Stream defaultProtocol
+       bindSocket sock (SockAddrInet port iNADDR_ANY)
+       listen sock 1
+       loop sock
+    where
+      talk (client,addr) =
+          do ch <- createGameControlChannel client
+             orienter <- newEmptyMVar
+             conversation p w ch (ConversationState orienter)
+
+      loop sock =
+          do putStrLn $ "listening..."
+             (client,addr) <- accept sock
+
+             updates <- forkIO $ runStateUpdatesSender addr p 20
+             handle (client,addr)
+             killThread updates
+
+             loop sock
+
+      handle (client,addr) =
+          ( do putStrLn $ "incoming connection from " ++ show addr
+               talk (client,addr)
+               disconnect client
+          ) `E.catch` ( \(err::E.SomeException) ->
+                            do putStrLn $ "connection error: " ++ show err
+                               disconnect client
+                      )
+          where
+            disconnect sock =
+                do E.try (sClose sock) :: IO (Either E.SomeException ())
+                   putStrLn "client disconnected."
+
+runStateUpdatesSender :: SockAddr -> WinProcess -> Int -> IO ()
+runStateUpdatesSender addr p delay_ms =
+    do sock <- socket AF_INET Datagram defaultProtocol
+       ch <-createStateUpdatesChannel sock (Just addr)
+       updates ch 0
+    where
+      updates ch i =
+          do camera <- getCamera p
+             sendCommand ch $ UpdateCamera camera
+             when big_update $
+                  do ply <- getPlayerData p
+                     ent <- getEntityList p
+                     sendCommand ch $ UpdatePlayer ply
+                     sendCommand ch $ UpdateEntities ent
+             threadDelay $ delay_ms * 1000
+             updates ch (i+1)
+          where
+            big_update = i `mod` 10 == 0
+
+data ConversationState = ConversationState { cameraOrienter :: MVar ThreadId }
+
+conversation :: WinProcess -> HWND -> CommandChannel IO -> ConversationState -> IO ()
+conversation p hwnd ch state = 
+    do cmd <- readCommand ch
+       handle cmd
+       conversation p hwnd ch state
+    where
+      handle (AbsMoveMousePerc x y)    = withActiveWindow hwnd $ c_mouse_set_cursor_pos_perc hwnd (realToFrac x) (realToFrac y)
+      handle (RelMoveMouse dx dy)      = withActiveWindow hwnd $ c_mouse_move (fromIntegral dx) (fromIntegral dy)
+      handle (ChangeKeyState Down key) = withActiveWindow hwnd $ c_key_down $ fromIntegral key
+      handle (ChangeKeyState Up key)   = withActiveWindow hwnd $ c_key_up $ fromIntegral key
+      handle (ChangeMouseState Down L) = withActiveWindow hwnd $ c_mousebutton_down 0
+      handle (ChangeMouseState Up   L) = withActiveWindow hwnd $ c_mousebutton_up 0
+      handle (ChangeMouseState Down R) = withActiveWindow hwnd $ c_mousebutton_down 1
+      handle (ChangeMouseState Up   R) = withActiveWindow hwnd $ c_mousebutton_up 1
+      handle (OrientCamera t_r)        = withActiveWindow hwnd $ orientCamera p hwnd t_r (cameraOrienter state)
+      handle c = error $ "unhandled command " ++ show c
+
+withActiveWindow :: HWND -> IO a -> IO a
+withActiveWindow hwnd act =
+    do winsetForegroundWindow hwnd
+       threadDelay ( 10 * 10^3 )
+       act
+
+orientCamera :: WinProcess -> HWND -> Float -> MVar ThreadId -> IO ()
+orientCamera p hwnd t_r orienter =
+    do maybe_id <- tryTakeMVar orienter
+       case maybe_id of
+         Just id -> killThread id
+         Nothing -> return ()
+       t0 <- getCurrentTime
+       id <- forkIO (acquire >> runOrienter t0)
+       putMVar orienter id
+
+    where
+      -- only let orienter run for few seconds
+      runOrienter :: UTCTime -> IO ()
+      runOrienter t0 =
+          do t1 <- getCurrentTime
+             let diff = realToFrac (diffUTCTime t1 t0) :: Float
+             case () of
+               _ | diff <= 3 -> orientCameraStep p t_r >> delay 20 >> runOrienter t0
+                 | otherwise -> release
+      delay ms  = threadDelay $ ms * 10^3
+      acquire   = c_mouse_set_cursor_pos_perc hwnd 50 50 >> delay 50 >> c_mousebutton_down 1 >> delay 50
+      release   = withActiveWindow hwnd $ c_mousebutton_up 1 >> delay 50
+
+orientCameraStep :: WinProcess -> Float -> IO ()
+orientCameraStep p t_r =
+    do camera <- getCamera p
+       let r0 = camera_rot camera
+       rotate r0 t_r
+    where
+      epsilon = 2
+      rotate r0 t_r
+          | abs (t_r - r0) < epsilon = return () -- hooray rotated already
+          | otherwise =
+              do let diff_a = max t_r r0 - min t_r r0
+                     diff_b = 360 - diff_a
+                     d =
+                         case () of
+                           _ | r0 >= t_r, diff_a <= diff_b -> -diff_a
+                             | r0 >= t_r, diff_a >  diff_b ->  diff_b
+                             | r0 <  t_r, diff_a <= diff_b ->  diff_a
+                             | otherwise                   -> -diff_b
+                     speed = min 25 . max 2 $ (abs d / 5) ** 1.5 -- nice smooth function for rotation speed; lower when nearing target rotation
+                     dx = speed * (- (signum d))
+                 c_mouse_move (round dx) 0
+
+{-
+-- rotate camera by given amount
+rotateCamera :: Float -> AionBot ()
+rotateCamera delta =
+    -- shouldn't be taking more than few secs
+    do timeout 2.0 $
+               do parkMouse
+                  sendMouseBtn C.Down C.R
+                  finally (sendMouseBtn C.Up C.R) $ do
+                    delay 0.15
+                    c <- getCamera
+                    -- target rotation angle
+                    let t_r = snap $ camera_rot c + delta
+                    rotate (camera_rot c) t_r
+       delay 0.1
+       return ()
+    where
+      epsilon = 2
+      rotate r0 t_r
+          | abs (t_r - r0) < epsilon = return () -- hooray rotated
+          | otherwise =
+              do let diff_a = max t_r r0 - min t_r r0
+                     diff_b = 360 - diff_a
+                     d =
+                         case () of
+                           _ | r0 >= t_r, diff_a <= diff_b -> -diff_a
+                             | r0 >= t_r, diff_a >  diff_b ->  diff_b
+                             | r0 <  t_r, diff_a <= diff_b ->  diff_a
+                             | otherwise                   -> -diff_b
+                     speed = min 20 . max 2 $ (abs d / 5) ** 1.5 -- nice smooth function for rotation speed; lower when nearing target rotation
+                     dx = speed * (- (signum d))
+                 -- debug $ printf "tr=%f r=%f dx=%f d=%f" t_r r0 dx d
+                 sendMouseMoveFast (round dx) 0
+                 -- delay and fetch new camera orientation from game, then continue with rotation
+                 delay 0.1
+                 c <- getCamera
+                 rotate (camera_rot c) t_r
+-}
+
