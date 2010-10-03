@@ -67,10 +67,29 @@ getChannel =
 ----
 ---- Wrappers around some comm channel functions so we don't have to pass channel everywhere
 ----
-click btn = getChannel >>= \c -> liftIO $ sendCommand c (ChangeMouseState Down btn)>> sendCommand c (ChangeMouseState Up btn)
-mouseTo x y = getChannel >>= \c -> liftIO $ sendCommand c $ AbsMoveMousePerc x y
-keyState state code = getChannel >>= \c -> liftIO $ sendCommand c $ ChangeKeyState state code
-keyPress code = getChannel >>= \c -> liftIO $ sendCommand c (ChangeKeyState Down code) >> sendCommand c (ChangeKeyState Up code)
+click btn =
+    getChannel >>= \c ->
+        do liftIO $ sendCommand c (ChangeMouseState Down btn)
+           delay 0.1
+           liftIO $ sendCommand c (ChangeMouseState Up btn)
+           delay 0.1
+
+mouseTo x y =
+    getChannel >>= \c ->
+        do liftIO $ sendCommand c $ AbsMoveMousePerc x y
+           delay 0.1
+
+keyState state code =
+    getChannel >>= \c ->
+        do liftIO $ sendCommand c $ ChangeKeyState state code
+           delay 0.1
+
+keyPress code =
+    getChannel >>= \c ->
+        do liftIO $ sendCommand c (ChangeKeyState Down code) 
+           delay 0.1
+           liftIO $ sendCommand c (ChangeKeyState Up code)
+           delay 0.1
 
 ----
 ---- Control Commands
@@ -250,6 +269,7 @@ killTarget =
                     info $ "victory, " ++ entity_name t ++ " DIED!"
       rotate_skills =
           do c <- getConfig
+             info $ "executing combat rotation!"
              execute (combat_rotation c)
 
 ----
@@ -338,11 +358,13 @@ execute r@(Repeat elems) = mapM_ execute_elem elems >> execute r
 execute r@(Once elems)   = mapM_ execute_elem elems
 
 execute_elem :: RotationElem -> AionBot ()
-execute_elem (Rotation nest) = execute nest
-execute_elem (KeyPress key) = keyPress key
-execute_elem (KeyHold key) = keyState Down key
-execute_elem (KeyRelease key) = keyState Up key
-execute_elem (Delay dt) = delay dt
+execute_elem e = debug (show e) >> execute_elem' e
+execute_elem' :: RotationElem -> AionBot ()
+execute_elem' (Rotation nest) = execute nest
+execute_elem' (KeyPress key) = keyPress key
+execute_elem' (KeyHold key) = keyState Down key
+execute_elem' (KeyRelease key) = keyState Up key
+execute_elem' (Delay dt) = delay dt
 
 -- access list of mobs in combat with player
 getCombatants :: AionBot [Entity]
@@ -472,7 +494,7 @@ ioDiffTime t0 =
        return . realToFrac $ diffUTCTime t1 t0
 
 debug :: String -> AionBot ()
-debug s = liftIO (putStrLn s)
+debug s = return () -- liftIO (putStrLn s)
 
 info :: String -> AionBot ()
 info s = liftIO (putStrLn s)

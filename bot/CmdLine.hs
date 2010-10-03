@@ -13,6 +13,7 @@ data Cmd = Abort | Quit | NextTarget | AimTarget | WalkTarget | TargetInfo | Pla
          | Strafe StrafeDirection
          | Walk | Backpedal
          | Kill
+         | Grind
 
 execCmd :: Cmd -> AionBot ()
 execCmd cmd = 
@@ -30,6 +31,7 @@ execCmd' WalkTarget = walkToTarget 10
 execCmd' NextTarget = nextTarget
 execCmd' ParkMouse = parkMouse
 execCmd' (Strafe d) = strafe d
+execCmd' Grind = grind
 execCmd' Jump = jump
 execCmd' Walk = walk
 execCmd' Backpedal = backpedal
@@ -57,6 +59,7 @@ parseCmd cmd =
       ["d"] -> Just (Strafe StrafeRight)
       ["w"] -> Just Walk
       ["s"] -> Just Backpedal
+      ["grind"] -> Just Grind
       ["forward", secs_str] ->
           case reads secs_str of
             [(secs,_)] -> Just $ Forward secs

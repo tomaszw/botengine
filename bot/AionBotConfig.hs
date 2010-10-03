@@ -22,9 +22,9 @@ defaultConfig =
                                , qb 3, Delay 0.2
                                , qb 4, Delay 0.2
                                , qb 5, Delay 0.2
-                               , qb 6, Delay 0.2
-                               , aqb 2, Delay 0.2
-                               , aqb 5, Delay 0.2 ]
+                               , qb 6, Delay 0.2 ]
+                               --, aqb 2, Delay 0.2
+                               --, aqb 5, Delay 0.2 ]
     , loot_key = keyQuickbarBase + 0
     }
     where
@@ -35,9 +35,10 @@ defaultConfig =
       
 data Rotation   = Repeat [RotationElem]
                 | Once [RotationElem]
-
+                deriving ( Eq, Show )
 data RotationElem = KeyPress KeyCode
                   | KeyHold KeyCode
                   | KeyRelease KeyCode
                   | Delay Float
                   | Rotation Rotation -- nested rotation
+                  deriving ( Eq, Show )
