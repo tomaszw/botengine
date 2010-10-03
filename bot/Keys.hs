@@ -14,3 +14,4 @@ keyJump = charKey ' '
 keyStrafeLeft = charKey 'Q'
 keyStrafeRight = charKey 'E'
 keyQuickbarBase = charKey '0'
+keyAttack = keyQuickbarBase + 1

@@ -7,20 +7,28 @@ module AionBot ( AionBot
                , getPlayerEntity
                , getTarget
                , getEntities
+               , getTargetting
+               , getTargettingMe
+
+               , StrafeDirection (..)
+
                , aimTarget
                , nextTarget
-               , StrafeDirection (..)
+               , rotateCamera
+
                , strafe
                , walk
                , backpedal
                , jump
                , walkToTarget
-               , rotateCamera
+
+               , killTarget
                ) where
 
 import Common
 import Data.Binary ( encode )
 import Data.Map (Map)
+import Data.Maybe
 import Data.Time
 import Data.Time.Clock
 import qualified Data.ByteString.Lazy as BL
@@ -219,19 +227,113 @@ walkToTarget maxtime =
     where walk Nothing = return ()
           walk (Just t) = walkTo maxtime (entity_pos t)
 
+-- attack current target
+attackTarget :: AionBot ()
+attackTarget =
+    getTarget >>= attack
+  where
+    attack Nothing  = return ()
+    attack (Just t) = do info $ "attacking " ++ (entity_name t)
+                         keyPress keyAttack
+
+-- kill current target
+killTarget :: AionBot ()
+killTarget =
+    getTarget >>= kill
+    where
+      kill Nothing  = return ()
+      kill (Just t) =
+          do attackTarget
+             wait (isDead . entity_id $ t)
+             info $ "victory, " ++ entity_name t ++ " DIED!"
+
 ----
 ---- Bot state
 ----
 data BotState = BotState { agent_channel   :: CommandChannel IO
-                         , camera    :: Camera
-                         , player    :: Player
-                         , entities  :: [Entity]
-                         , entity_map :: Map Int Entity }
+                         , camera          :: Camera
+                         , player          :: Player
+                         , entities        :: [Entity]
+                         , entity_map      :: Map Int Entity
+                         , combat_map      :: [CombatMob]
+                         }
+
+-- state of combat with given mob
+data CombatMob = CombatMob { combat_id :: EntityID
+                           , combat_last_time :: Float }
 
 -- periodically read state from GameState object
 stateReader :: GameState -> Float -> AionBot ()
 stateReader gs period =
     updateState gs >> delay period >> stateReader gs period
+
+-- periodically expire mobs from combat map
+combatExpirator :: Float -> AionBot ()
+combatExpirator period =
+    do s <- liftState get
+       combat' <- foldM expire [] (combat_map s)
+       liftState . put $ s { combat_map = combat' }
+       delay period
+       combatExpirator period
+    where
+      expire :: [CombatMob] -> CombatMob -> AionBot [CombatMob]
+      expire acc m@(CombatMob id target_t0) =
+          do e <- getEntity id
+             let dead = case e of
+                          Nothing -> False -- let it expire by timer
+                          Just e  -> isDeadPure e
+             t <- time
+             if dead || t - target_t0 > 8
+                then return acc
+                else return (m:acc)
+
+-- periodically insert/refresh mobs to combat map
+combatInserter :: Float -> AionBot ()
+combatInserter period =
+    do es <- getEntities
+       p  <- getPlayer
+       mapM_ (update p) es
+       delay period
+       combatInserter period
+    where
+      update ply e
+          | player_id ply == entity_id e        = return ()
+          | player_id ply == entity_target_id e = combatMark e
+          | otherwise                           = return ()
+
+-- set as being in combat with entity
+combatMark :: Entity -> AionBot ()
+combatMark e =
+    do s <- liftState get
+       t <- time
+       let combat  = filter (\mob -> combat_id mob /= entity_id e) (combat_map s)
+           combat' = CombatMob (entity_id e) t : combat
+       liftState . put $ s { combat_map = combat' }
+
+-- check if player is in combat with xxx
+inCombatWith :: Entity -> AionBot Bool
+inCombatWith e =
+    do combatants <- getCombatants
+       return $ e `elem` combatants
+
+isDeadPure :: Entity -> Bool
+isDeadPure e | entity_hp e <= 0 || entity_state e == EntityDead = True
+             | otherwise = False
+
+isDead :: EntityID -> AionBot Bool
+isDead id =
+    getEntity id >>= test
+    where
+      test Nothing  = return False
+      test (Just e) = return $ isDeadPure e
+
+-- access list of mobs in combat with player
+getCombatants :: AionBot [Entity]
+getCombatants =
+    do s <- liftState get
+       let combat = map combat_id $ combat_map s
+       entities <- mapM getEntity combat
+       return $ catMaybes entities
 
 -- access camera
 getCamera :: AionBot Camera
@@ -250,7 +352,7 @@ getPlayerEntity = getPlayer >>= \p ->
                     Just e -> return e
 
 -- access entity by ID
-getEntity :: Int -> AionBot (Maybe Entity)
+getEntity :: EntityID -> AionBot (Maybe Entity)
 getEntity id = liftState get >>= \s -> return $ M.lookup id (entity_map s)
 
 -- access current entity list
@@ -260,6 +362,16 @@ getEntities = liftState get >>= return . entities
 -- access current player target
 getTarget :: AionBot (Maybe Entity)
 getTarget = getPlayerEntity >>= \p -> getEntity (entity_target_id p)
+
+-- all targetting given entity
+getTargetting :: EntityID -> AionBot [Entity]
+getTargetting id =
+    do es <- getEntities
+       return $ filter (\e' -> entity_target_id e' == id) es
+
+-- all targetting player
+getTargettingMe :: AionBot [Entity]
+getTargettingMe = getPlayer >>= \p -> getTargetting (player_id p)
 
 -- fetch complete state from game
 updateState :: GameState -> AionBot ()
@@ -279,8 +391,10 @@ runAionBot agent_ch game_state aionbot =
        let mt = unBot $
                 do -- initial state fetch into monad
                    updateState game_state
-                   -- periodic state updates
+                   -- periodic state updates, combat updates etc
                    withSpark (stateReader game_state 0.01) $ \_ ->
+                       withSpark (combatExpirator 0.5) $ \_ ->
+                           withSpark (combatInserter 0.5) $ \_ ->
                              -- rest of botting
                              aionbot
            state = runMicroThreadT (ioHandler t0) mt
@@ -291,7 +405,8 @@ runAionBot agent_ch game_state aionbot =
                   , camera = undefined
                   , player = undefined
                   , entities = undefined
-                  , entity_map = undefined }
+                  , entity_map = undefined
+                  , combat_map = [] }
 
 -- forks it in background
 runAbortableAionBot :: CommandChannel IO -> GameState -> AionBot () -> IO (ThreadId, IO (), MVar ())

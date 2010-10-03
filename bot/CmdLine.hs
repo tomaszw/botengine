@@ -12,6 +12,7 @@ data Cmd = Abort | Quit | NextTarget | AimTarget | WalkTarget | TargetInfo | Pla
          | Rotate Float | Forward Float | Jump
          | Strafe StrafeDirection
          | Walk | Backpedal
+         | Kill
 
 execCmd :: Cmd -> AionBot ()
 execCmd cmd = 
@@ -32,6 +33,7 @@ execCmd' (Strafe d) = strafe d
 execCmd' Jump = jump
 execCmd' Walk = walk
 execCmd' Backpedal = backpedal
+execCmd' Kill = killTarget
 execCmd' (Forward secs) = timeout secs $ walk
 execCmd' (Rotate a) = rotateCamera a
 execCmd' _ = error "bad command"
@@ -64,6 +66,8 @@ parseCmd cmd =
             [(f,_)] -> Just $ Rotate f
             _ -> Nothing
 
+      ["kill"] -> Just Kill
+          
       _ -> Nothing
 
 data Task = Task { abortTask :: IO ()

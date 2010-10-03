@@ -1,4 +1,4 @@
-module Aion ( Player(..),Entity(..),EntityType(..),Camera(..)
+module Aion ( Player(..),Entity(..),EntityType(..),Camera(..), EntityState(..), EntityID
             , getEntityList
             , getPlayerData
             , getCamera ) where
@@ -26,7 +26,7 @@ instance Binary Camera where
            return $ Camera rot
 
 data Player = Player {
-      player_id :: !Int
+      player_id :: !EntityID
     , player_hp :: !Int
     , player_hpmax :: !Int
     , player_level :: !Int
@@ -76,9 +76,32 @@ mkEntityType 1 = EPlayer
 mkEntityType 2 = ENPC
 mkEntityType _ = EOther
 
+data EntityState = EntityIdle
+                 | EntityCombat
+                 | EntityDead
+                 | EntityUnknownState
+                 deriving (Eq, Show)
+
+instance Binary EntityState where
+    put EntityIdle = put (0::Word8)
+    put EntityCombat = put (1::Word8)
+    put EntityDead = put (7::Word8)
+    put EntityUnknownState = put (0xFF::Word8)
+    
+    get = do (c::Word8) <- get
+             return $ mkEntityState (fromIntegral c)
+
+mkEntityState :: Int -> EntityState
+mkEntityState 0 = EntityIdle
+mkEntityState 1 = EntityCombat
+mkEntityState 7 = EntityDead
+mkEntityState _ = EntityUnknownState
+
+type EntityID = Int
+
 data Entity = Entity {
       entity_addr :: !Word32
-    , entity_id :: !Int
+    , entity_id :: !EntityID
     , entity_target_id :: !Int
     , entity_hp :: !Int
     , entity_level :: !Int
@@ -86,18 +109,24 @@ data Entity = Entity {
     , entity_type :: !EntityType
     , entity_type2 :: !Int
     , entity_name :: String
-    } deriving (Eq, Show)
+    , entity_state :: EntityState
+    } deriving (Show)
+
+instance Eq Entity where
+    a == b = (entity_id a) == (entity_id b)
 
 instance Binary Entity where
     put e = put (entity_addr e) >> put (entity_id e) >> put (entity_target_id e)
             >> put (entity_hp e) >> put (entity_level e) >> put (entity_pos e)
             >> put (entity_type e) >> put (entity_type2 e) >> put (entity_name e)
+            >> put (entity_state e)
     get =
         do { addr <- get; id <- get; target_id <- get; hp <- get; level <- get
-           ; pos <- get; typ <- get; typ2 <- get; name <- get
+           ; pos <- get; typ <- get; typ2 <- get; name <- get; state <- get
            ; return $ Entity { entity_addr = addr, entity_id = id, entity_target_id = target_id
                              , entity_hp = hp, entity_level = level, entity_pos = pos
-                             , entity_type = typ, entity_type2 = typ2, entity_name = name }
+                             , entity_type = typ, entity_type2 = typ2, entity_name = name
+                             , entity_state = state }
            }
                       
 peekInt :: (Process m p) => p -> Word32 -> m Int
@@ -148,6 +177,7 @@ getEntity c addr =
                   , entity_type = mkEntityType typ
                   , entity_type2 = type2
                   , entity_name = name
+                  , entity_state = mkEntityState state
                   }
 
 getEntityList :: (Process m p) => p -> m [Entity]
