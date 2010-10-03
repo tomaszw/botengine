@@ -646,8 +646,8 @@ ioDiffTime t0 =
     do t1 <- getCurrentTime
        return . realToFrac $ diffUTCTime t1 t0
 
-debug :: String -> AionBot ()
-debug s = return () -- liftIO (putStrLn s)
-
 info :: String -> AionBot ()
 info s = liftIO (putStrLn s)
+
+debug :: String -> AionBot ()
+debug s = liftIO (debugIO s)

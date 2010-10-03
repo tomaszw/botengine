@@ -9,7 +9,9 @@ module Common ( module Data.Ord
               , module Control.Monad
               , module Control.Monad.Trans
               , module Control.Applicative
-              , module System.IO ) where
+              , module System.IO
+              , debugIO
+              ) where
 
 import Data.List
 import Data.List.Split
@@ -23,3 +25,12 @@ import Control.Monad
 import Control.Monad.Trans
 import Control.Applicative
 import System.IO
+import Data.Time
+import Data.Time.Clock
+
+debugIO :: String -> IO ()
+debugIO s =
+    do t <- getCurrentTime
+       hPutStrLn stderr $ (show t) ++ ": " ++ s
+       hFlush stderr
+

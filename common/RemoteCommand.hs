@@ -32,9 +32,9 @@ instance Binary Button where
     get = do c <- get :: Get Word8
              case c of { 0 -> return L; 1 -> return R; _ -> error "error reading button" }
 
-data CommandChannel m = CommandChannel { channel      :: Channel m
-                                       , datagram_sz  :: Int
-                                       , counter      :: Maybe (PacketCounter Command)
+data CommandChannel m = CommandChannel {
+                                         ch_send      :: Command -> m ()
+                                       , ch_read      :: m Command
                                        }
 
 data Command = ChangeKeyState KeyState KeyCode
@@ -92,28 +92,28 @@ instance Binary Command where
                _ -> error "error reading command"
 
 sendCommand :: (MonadIO m) => CommandChannel m -> Command -> m ()
-sendCommand (CommandChannel ch sz cnt) cmd
-    | Just counter <- cnt = sendCountedPacket ch sz cmd counter
-    | otherwise           = sendFixedSzPacket ch sz cmd
+sendCommand = ch_send
 
 readCommand :: (MonadIO m) => CommandChannel m -> m Command
-readCommand (CommandChannel ch sz cnt)
-    | Just counter <- cnt = readCountedPacket ch sz counter
-    | otherwise           = readFixedSzPacket ch sz
+readCommand = ch_read
 
 -- we use udp for bulk game state updates
 createStateUpdatesChannel :: (MonadIO m) => Socket -> Maybe SockAddr -> m (CommandChannel m)
 createStateUpdatesChannel sock addr =
-    do c  <- newPacketCounter classify
+    do counter <- newPacketCounter classify
        let ch = channelFromUDPSocket sock addr
-       return $ CommandChannel { channel     = ch
-                               , datagram_sz = 16384
-                               , counter = Just c }
+       return $ CommandChannel
+                  {
+                    ch_send = \cmd -> liftIO (debugIO $ "send-c " ++ show cmd) >> sendCountedPacket ch 16384 cmd counter
+                  , ch_read = readCountedPacket ch 16384 counter
+                  }
 
 -- we use tcp for small control events, assume socket is already connected
 createGameControlChannel :: (MonadIO m) => Socket -> m (CommandChannel m)
 createGameControlChannel sock  =
     do let ch = channelFromTCPSocket sock
-       return $ CommandChannel { channel     = ch
-                               , datagram_sz = 64
-                               , counter     = Nothing }
+       return $ CommandChannel
+                  { 
+                    ch_send = \cmd -> liftIO (debugIO $ "send-l " ++ show cmd) >> sendLengthEncodedPacket ch cmd
+                  , ch_read = readLengthEncodedPacket ch
+                  }

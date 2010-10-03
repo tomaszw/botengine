@@ -3,6 +3,7 @@ module Protocol ( PacketCounter
                 , newPacketCounter
                 , sendCountedPacket, readCountedPacket
                 , sendFixedSzPacket, readFixedSzPacket
+                , sendLengthEncodedPacket, readLengthEncodedPacket
                 ) where
 
 import Common
@@ -51,6 +52,22 @@ readFixedSzPacket :: (MonadIO m, Binary b) => Channel m -> Int -> m b
 readFixedSzPacket c maxSz =
     do buf <- channRecv c maxSz
        return $ decode buf
+
+sendLengthEncodedPacket :: (MonadIO m, Binary b) => Channel m -> b -> m ()
+sendLengthEncodedPacket c p =
+    do let buf = encode p
+           len = fromIntegral (BL.length buf) :: Word32
+       channSend c (encode len)
+       channSend c buf
+
+readLengthEncodedPacket :: (MonadIO m, Binary b) => Channel m -> m b
+readLengthEncodedPacket c =
+    do buf <- channRecv c 4
+       let len = decode buf :: Word32
+       buf <- channRecv c (fromIntegral len)
+       return $ decode buf
+
+
 
 data PacketCounter b = PacketCounter { pc_classify :: b -> Int
                                      , pc_counters :: MVar (Map Int Integer) }
