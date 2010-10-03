@@ -12,6 +12,7 @@ module AionBot ( AionBot
                , StrafeDirection (..)
                , strafe
                , walk
+               , backpedal
                , jump
                , walkToTarget
                , rotateCamera
@@ -182,6 +183,13 @@ walk =
        finally (keyState Up keyForward) $
                waitForever
 
+-- walk backwards
+backpedal :: AionBot ()
+backpedal =
+    do keyState Down keyBackward
+       finally (keyState Up keyBackward) $
+               waitForever
+
 -- walk up to given point
 walkTo :: Float -> Vec3 -> AionBot ()
 walkTo maxtime p =
@@ -312,8 +320,8 @@ runAbortableAionBot agent_ch game_state action =
 ioHandler :: (MonadIO m) => UTCTime -> Request a -> m a
 ioHandler t0 (ThreadDelay secs) = liftIO . threadDelay $ round (secs * 10^6)
 ioHandler t0 GetCurrentTime = liftIO $ ioDiffTime t0
-ioHandler t0 (Trace msg) = liftIO . putStrLn $ "thread> " ++ msg
---ioHandler t0 (Trace msg) = return ()
+--ioHandler t0 (Trace msg) = liftIO . putStrLn $ "thread> " ++ msg
+ioHandler t0 (Trace msg) = return ()
 
 ioDiffTime :: UTCTime -> IO Float
 ioDiffTime t0 =

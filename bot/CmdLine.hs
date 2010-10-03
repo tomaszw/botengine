@@ -11,6 +11,7 @@ import RemoteCommand
 data Cmd = Abort | Quit | NextTarget | AimTarget | WalkTarget | TargetInfo | PlayerInfo | EntitiesInfo | ParkMouse
          | Rotate Float | Forward Float | Jump
          | Strafe StrafeDirection
+         | Walk | Backpedal
 
 execCmd :: Cmd -> AionBot ()
 execCmd cmd = 
@@ -29,6 +30,8 @@ execCmd' NextTarget = nextTarget
 execCmd' ParkMouse = parkMouse
 execCmd' (Strafe d) = strafe d
 execCmd' Jump = jump
+execCmd' Walk = walk
+execCmd' Backpedal = backpedal
 execCmd' (Forward secs) = timeout secs $ walk
 execCmd' (Rotate a) = rotateCamera a
 execCmd' _ = error "bad command"
@@ -47,13 +50,16 @@ parseCmd cmd =
       ["n"] -> Just NextTarget
       ["park"] -> Just ParkMouse
       ["j"] -> Just Jump
-      ["l"] -> Just (Strafe StrafeLeft)
-      ["r"] -> Just (Strafe StrafeRight)
+      -- plain movement keys
+      ["a"] -> Just (Strafe StrafeLeft)
+      ["d"] -> Just (Strafe StrafeRight)
+      ["w"] -> Just Walk
+      ["s"] -> Just Backpedal
       ["forward", secs_str] ->
           case reads secs_str of
             [(secs,_)] -> Just $ Forward secs
             _ -> Nothing
-      ["rot", v] ->
+      ["r", v] ->
           case reads v of
             [(f,_)] -> Just $ Rotate f
             _ -> Nothing
