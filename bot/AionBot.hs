@@ -426,9 +426,11 @@ retaliate =
 
 selfHeal :: AionBot ()
 selfHeal =
-    do cfg <- getConfig
+    do info "Healing myself!" 
+       cfg <- getConfig
        execute (heal_self_rotation cfg)
        wait ( getPlayerHealthPercent >>= \p -> return $ p == 100 )
+       info "HEALTH FULL"
 
 distanceSort :: Vec3 -> [Entity] -> [Entity]
 distanceSort p es = sortBy (comparing distance) es
@@ -464,7 +466,8 @@ combatExpirator period =
        combat' <- foldM expire [] (combat_map s)
        liftState . put $ s { combat_map = combat' }
        delay period
-       debug $ "in combat with " ++ show (length combat') ++ " monsters."
+       ply <- getPlayer
+       debug $ printf "in combat with %d monsters. HP = %d." (length combat') (player_hp ply)
        when (not . null $ combat') $
             do t <- time
                liftState . modify $ \s -> s { combat_last_time_ply = t }
