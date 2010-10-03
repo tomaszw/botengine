@@ -319,7 +319,7 @@ select e = do
           do t <- getTarget
              case t of
                Just t | t == e    -> return True
-                      | otherwise -> nextTarget >> try_select
+               _                  -> nextTarget >> try_select
     
 ------------------------------
 ---- PRIMARY GRINDING ROUTINE! awesome in its simplicity
@@ -327,11 +327,10 @@ select e = do
 grind :: AionBot ()
 grind =
     invariant alive died $
-    invariant (not <$> inCombat) (retaliate >> grind) $
               grindy_grind
     where
       grindy_grind =
-          do pickGrindTarget
+          do invariant (not <$> inCombat) (retaliate >> grind) pickGrindTarget
              pullTarget
              grindy_grind
 
@@ -545,9 +544,15 @@ getEntity id = liftState get >>= \s -> return $ M.lookup id (entity_map s)
 getEntities :: AionBot [Entity]
 getEntities = liftState get >>= return . entities
 
--- access current player target
+-- access current player target. don't return dead mobs
 getTarget :: AionBot (Maybe Entity)
-getTarget = getPlayerEntity >>= \p -> getEntity (entity_target_id p)
+getTarget =
+    do p <- getPlayerEntity
+       e <- getEntity (entity_target_id p)
+       case e of
+         Just e | not (isDeadPure e),
+                  (entity_id e /= 0) -> return $ Just e
+         _ -> return Nothing
 
 -- all targetting given entity
 getTargetting :: EntityID -> AionBot [Entity]
