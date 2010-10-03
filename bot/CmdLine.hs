@@ -14,10 +14,10 @@ data Cmd = Abort | Quit | NextTarget | AimTarget | WalkTarget | TargetInfo | Pla
 
 execCmd :: Cmd -> AionBot ()
 execCmd cmd = 
-    do t0 <- time
+    do --t0 <- time
        execCmd' cmd
-       t1 <- time
-       liftIO $ putStrLn $ printf "... finished %.2f secs" (t1-t0)
+       --t1 <- time
+       --liftIO $ putStrLn $ printf "... finished %.2f secs" (t1-t0)
 
 execCmd' :: Cmd -> AionBot ()
 execCmd' AimTarget = aimTarget
@@ -37,7 +37,7 @@ parseCmd :: String -> Maybe Cmd
 parseCmd cmd =
     let cmds = splitOn " " cmd in
     case cmds of
-      [] -> Just Abort
+      [""] -> Just Abort
       ["q"] -> Just Quit
       ["aim"] -> Just AimTarget
       ["p"] -> Just PlayerInfo
@@ -115,12 +115,18 @@ backgroundJobAbort state =
        case bg of
          Nothing   -> return ()
          Just task ->
-             do putStr "aborting task... "
-                hFlush stdout
-                abortTask task
-                takeMVar (finished task)
-                writeIORef (background state) Nothing
-                putStrLn "DONE"
+             do finish <- tryTakeMVar (finished task)
+                case finish of
+                  Just _  -> return () -- already finished
+                  Nothing ->
+                      do putStr "aborting task... "
+                         hFlush stdout
+                         abortTask task
+                         takeMVar (finished task)
+                         writeIORef (background state) Nothing
+                         putStrLn "DONE"
+                         -- for kicks
+                         putMVar (finished task) ()
 
 
 

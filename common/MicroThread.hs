@@ -207,14 +207,14 @@ newThread id thread =
            , threadID = id
            , finalisers = [] }
 
-getThread :: ThreadID -> MicroThreadT m (Thread m)
+getThread :: ThreadID -> MicroThreadT m (Maybe (Thread m))
 getThread id =
     do s <- get
        return $ find id (threads s)
     where
       find id ts = case filter ( \t -> threadID t == id ) ts of
-                     [ t ] -> t
-                     [ ] -> error $ "no thread of id " ++ show id
+                     [ t ] -> Just t
+                     [ ] -> Nothing
                      _-> error $ "more than one thread with id " ++ show id
 
 
@@ -222,10 +222,14 @@ killThread :: ThreadID -> MicroThreadT m ()
 killThread thread_id =
     do trace $ "killing " ++ show thread_id
        thread <- getThread thread_id
-       modify  $ \s -> s { threads = filter p (threads s) }
-       -- execute any finalisers
-       let fs = finalisers thread
-       sequence_ fs
+       case thread of
+         Just thread ->
+             do modify  $ \s -> s { threads = filter p (threads s) }
+                -- execute any finalisers
+                let fs = finalisers thread
+                sequence_ fs
+         Nothing ->
+             return ()
   where
     p t = threadID t /= thread_id
 

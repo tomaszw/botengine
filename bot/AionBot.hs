@@ -293,8 +293,8 @@ runAbortableAionBot agent_ch game_state action =
        finished_var <- newEmptyMVar
        id <- forkIO $ do
                runAionBot agent_ch game_state $ do
-                        spark (aborter abort_var)
-                        action
+                        withSpark (aborter abort_var) $ \_ ->
+                                  action
                putMVar finished_var ()
        return $ (id, abort_fun abort_var, finished_var)
     where
