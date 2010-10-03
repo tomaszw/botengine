@@ -336,7 +336,10 @@ grind =
     where
       grindy_grind =
           do info "grindy grind"
-             invariant (not <$> combat_check) (retaliate >> grind) pickGrindTarget
+             invariant (not <$> combat_check) (retaliate >> grind) $
+                       do hp <- getPlayerHealthPercent
+                          when (hp < 80) selfHeal
+                          pickGrindTarget
              pulled <- withSpark pullTarget $ \pull_id ->
                  pull_check pull_id
              if pulled
@@ -421,6 +424,12 @@ retaliate =
                    kill m
                    retaliate
 
+selfHeal :: AionBot ()
+selfHeal =
+    do cfg <- getConfig
+       execute (heal_self_rotation cfg)
+       wait ( getPlayerHealthPercent >>= \p -> return $ p == 100 )
+
 distanceSort :: Vec3 -> [Entity] -> [Entity]
 distanceSort p es = sortBy (comparing distance) es
     where
@@ -482,6 +491,7 @@ combatInserter period =
        combatInserter period
     where
       update ply e
+          | entity_type e /= ENPC               = return ()
           | player_id ply == entity_id e        = return ()
           | player_id ply == entity_target_id e = combatMark e
           | otherwise                           = return ()
@@ -574,6 +584,11 @@ getPlayerEntity = getPlayer >>= \p ->
                   case e of
                     Nothing -> error "There is no player entity!"
                     Just e -> return e
+
+getPlayerHealthPercent :: AionBot Int
+getPlayerHealthPercent =
+    do p <- getPlayer
+       return ( player_hp p * 100 `div` player_hpmax p )
 
 -- access entity by ID
 getEntity :: EntityID -> AionBot (Maybe Entity)
