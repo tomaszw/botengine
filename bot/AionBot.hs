@@ -74,10 +74,9 @@ getChannel =
 ----
 click btn =
     getChannel >>= \c ->
-        do liftIO $ sendCommand c (ChangeMouseState Down btn)
-           delay 0.01
-           liftIO $ sendCommand c (ChangeMouseState Up btn)
-           delay 0.01
+        finally (liftIO $ sendCommand c (ChangeMouseState Up btn)) $
+                do liftIO $ sendCommand c (ChangeMouseState Down btn)
+                   delay 0.05
 
 mouseTo x y =
     getChannel >>= \c ->
@@ -87,14 +86,13 @@ mouseTo x y =
 keyState state code =
     getChannel >>= \c ->
         do liftIO $ sendCommand c $ ChangeKeyState state code
-           delay 0.01
+           delay 0.05
 
 keyPress code =
     getChannel >>= \c ->
-        do liftIO $ sendCommand c (ChangeKeyState Down code) 
-           delay 0.01
-           liftIO $ sendCommand c (ChangeKeyState Up code)
-           delay 0.01
+        finally (liftIO $ sendCommand c (ChangeKeyState Up code)) $
+                do liftIO $ sendCommand c (ChangeKeyState Down code) 
+                   delay 0.05
 
 ---
 --- FIXME: how to do this in core microthread monad?
@@ -468,7 +466,8 @@ combatExpirator period =
        liftState . put $ s { combat_map = combat' }
        delay period
        ply <- getPlayer
-       debug $ printf "in combat with %d monsters. HP = %d." (length combat') (player_hp ply)
+       when (length combat' > 0) $
+            info $ printf "in combat with %d monsters. HP = %d." (length combat') (player_hp ply)
        when (not . null $ combat') $
             do t <- time
                liftState . modify $ \s -> s { combat_last_time_ply = t }
@@ -481,7 +480,7 @@ combatExpirator period =
                           Nothing -> False -- let it expire by timer
                           Just e  -> isDeadPure e
              t <- time
-             if dead || t - target_t0 > 8
+             if dead || t - target_t0 > 4
                 then return acc
                 else return (m:acc)
 
@@ -559,12 +558,13 @@ execute r@(Once elems)   = mapM_ execute_elem elems
 execute_elem :: RotationElem -> AionBot ()
 execute_elem e = liftIO (putStr "." >> hFlush stdout) >> {- debug (show e) >> -} execute_elem' e
 execute_elem' :: RotationElem -> AionBot ()
+execute_elem' (Delay dt) = delay dt
 execute_elem' (Rotation nest) = execute nest
 execute_elem' (KeyPress key) = keyPress key
-execute_elem' (KeyHold key) = keyState Down key
-execute_elem' (KeyRelease key) = keyState Up key
-execute_elem' (Delay dt) = delay dt
-
+execute_elem' (HoldModKeyPress mod key) =
+    finally ( keyState Up mod ) $
+            keyState Down mod >> keyPress key
+            
 -- access list of mobs in combat with player
 getCombatants :: AionBot [Entity]
 getCombatants =

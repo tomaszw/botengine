@@ -39,14 +39,13 @@ defaultConfig =
       -- quickbar
       qb i  = KeyPress (keyQuickbarBase + i)
       -- alternate quickbar
-      aqb i = Rotation $ Once [KeyHold keyLeftAlt, Delay 0.01, qb i, Delay 0.01, KeyRelease keyLeftAlt, Delay 0.01]
+      aqb i = HoldModKeyPress keyLeftAlt (keyQuickbarBase + i)
       
 data Rotation   = Repeat [RotationElem]
                 | Once [RotationElem]
                 deriving ( Eq, Show )
 data RotationElem = KeyPress KeyCode
-                  | KeyHold KeyCode
-                  | KeyRelease KeyCode
+                  | HoldModKeyPress KeyCode KeyCode
                   | Delay Float
                   | Rotation Rotation -- nested rotation
                   deriving ( Eq, Show )
