@@ -360,7 +360,7 @@ grind =
           do c <- inCombat
              t <- timeSinceCombat
              case () of
-               _ | c == True && t >= 2 -> return True
+               _ | c == True && t <= 2 -> return True
                  | otherwise -> return False
 
 pickGrindTarget :: AionBot ()
