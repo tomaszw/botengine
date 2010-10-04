@@ -13,6 +13,7 @@ import Control.Concurrent hiding (yield, killThread)
 import Control.Monad.Trans
 import Control.Monad.Cont
 import Control.Monad.State
+import Control.Monad.ST.Trans
 import Control.Monad.Prompt
 import Text.Printf
 import Data.List
@@ -22,16 +23,33 @@ import System.IO
 
 type ThreadID = Int
 
-newtype MicroThreadT m a = MicroThreadT {
-      unMicroThreadT :: ContT () (StateT (SystemState m) (PromptT Request m)) a
+newtype MicroThreadT s m a = MicroThreadT {
+      unMicroThreadT ::
+          ContT () (
+                    StateT (SystemState s m) (
+                                             STT s (
+                                                    PromptT Request m
+                                                   )
+                                           )
+                   ) a
     }
-    deriving (Functor, Monad, MonadState (SystemState m), MonadCont)
+    deriving (Functor, Monad, MonadState (SystemState s m), MonadCont)
 
-instance MonadPrompt Request (MicroThreadT m) where
-    prompt = MicroThreadT . lift . lift . prompt
 
-instance MonadTrans MicroThreadT where
-    lift = MicroThreadT . lift . lift . lift
+foobar :: MicroThreadT s m Int
+foobar = liftST $
+    do x <- newSTRef 4
+       readSTRef x
+
+
+liftST :: STT s (PromptT Request m) a -> MicroThreadT s m a
+liftST = MicroThreadT . lift . lift
+
+instance MonadPrompt Request (MicroThreadT s m) where
+    prompt = MicroThreadT . lift . lift . lift . prompt
+
+instance MonadTrans (MicroThreadT s) where
+    lift = MicroThreadT . lift . lift . lift . lift
 
 class (Monad m) => MonadMicroThread m where
     delay :: Float -> m ()
@@ -46,7 +64,7 @@ class (Monad m) => MonadMicroThread m where
     getCurrentThread :: m ThreadID
     isThreadAlive :: ThreadID -> m Bool
 
-instance MonadMicroThread (MicroThreadT m) where
+instance MonadMicroThread (MicroThreadT s m) where
     delay dt =
         yield (Delay dt)
 
@@ -144,43 +162,43 @@ data Request a where
     Trace :: String -> Request ()
     Warn :: String -> Request ()
 
-data Thread m = Thread
+data Thread s m = Thread
     {
-      contThread :: () -> MicroThreadT m ()
-    , contThreadPred :: MicroThreadT m Bool
-    , invariants :: [ Invariant m ]
+      contThread :: () -> MicroThreadT s m ()
+    , contThreadPred :: MicroThreadT s m Bool
+    , invariants :: [ Invariant s m ]
     , scheduled :: Float
     , threadID :: ThreadID
-    , finalisers :: [Finaliser m]
+    , finalisers :: [Finaliser s m]
     }
 
-type Finaliser m = MicroThreadT m ()
+type Finaliser s m = MicroThreadT s m ()
 
-data Invariant m = Invariant
+data Invariant s m = Invariant
     {
       inv_id :: InvariantID
-    , inv_hold :: MicroThreadT m Bool
-    , inv_violation :: MicroThreadT m ()
+    , inv_hold :: MicroThreadT s m Bool
+    , inv_violation :: MicroThreadT s m ()
     } 
 
-instance Eq (Invariant m) where
+instance Eq (Invariant s m) where
     a == b = (inv_id a) == (inv_id b)
 
 type InvariantID = Int64
 
-data Yield m = Delay Float
-             | Spark [Thread m]
-             | SparkAndDie [Thread m]
+data Yield s m = Delay Float
+             | Spark [Thread s m]
+             | SparkAndDie [Thread s m]
              | Nop
              | Die
              | Kill ThreadID
              | Abort
 
-maxInvariantID :: Thread m -> InvariantID
+maxInvariantID :: Thread s m -> InvariantID
 maxInvariantID t | null (invariants t) = 0
                  | otherwise = maximum $ map inv_id (invariants t)
 
-instance Show (Yield m) where
+instance Show (Yield s m) where
     show (Delay f) = printf "delay %2.4f" f
     show (Spark _) = "spark"
     show (SparkAndDie _) = "spark-and-die"
@@ -189,17 +207,17 @@ instance Show (Yield m) where
     show (Kill id) = "kill " ++ show id
     show Abort = "abort"
 
-data SystemState m = SystemState
+data SystemState s m = SystemState
     {
-      jumpout :: Yield m -> MicroThreadT m ()
-    , current :: Thread m
-    , threads :: [Thread m]
-    , spark_threads :: [Thread m]
+      jumpout :: Yield s m -> MicroThreadT s m ()
+    , current :: Thread s m
+    , threads :: [Thread s m]
+    , spark_threads :: [Thread s m]
     , max_thread_id :: ThreadID
     , abortSystem :: Bool
     }
 
-yield :: Yield m -> MicroThreadT m ()
+yield :: Yield s m -> MicroThreadT s m ()
 yield y =
     callCC $ \cont ->
         do s <- get
@@ -208,20 +226,20 @@ yield y =
            put $ s { current = c' }
            jumpout s y
 
-pickThreadID :: MicroThreadT m ThreadID
+pickThreadID :: MicroThreadT s m ThreadID
 pickThreadID =
     do s <- get
        let id = max_thread_id s + 1
        modify $ \s -> s { max_thread_id = id }
        return id
 
-modifyCurrentT :: (Thread m -> Thread m) -> MicroThreadT m ()
+modifyCurrentT :: (Thread s m -> Thread s m) -> MicroThreadT s m ()
 modifyCurrentT f =
     modify $ \s ->
         let c  = f (current s) in
         s { current = c }
 
-withT :: (Thread m -> Thread m) -> MicroThreadT m a -> MicroThreadT m a
+withT :: (Thread s m -> Thread s m) -> MicroThreadT s m a -> MicroThreadT s m a
 withT mod act =
     do s <- get
        let c  = current s
@@ -231,7 +249,7 @@ withT mod act =
        modify $ \s -> s { current = c }
        return r
 
-newThread :: ThreadID -> MicroThreadT m () -> Thread m
+newThread :: ThreadID -> MicroThreadT s m () -> Thread s m
 newThread id thread =
     Thread { contThread = \ _ -> thread
            , contThreadPred = return True
@@ -240,7 +258,7 @@ newThread id thread =
            , threadID = id
            , finalisers = [] }
 
-getThread :: ThreadID -> MicroThreadT m (Maybe (Thread m))
+getThread :: ThreadID -> MicroThreadT s m (Maybe (Thread s m))
 getThread id =
     do s <- get
        return $ find id (threads s)
@@ -251,7 +269,7 @@ getThread id =
                      _-> error $ "more than one thread with id " ++ show id
 
 
-killThread :: ThreadID -> MicroThreadT m ()
+killThread :: ThreadID -> MicroThreadT s m ()
 killThread thread_id =
     do trace $ "killing " ++ show thread_id
        thread <- getThread thread_id
@@ -266,13 +284,13 @@ killThread thread_id =
   where
     p t = threadID t /= thread_id
 
-trace :: String -> MicroThreadT m ()
+trace :: String -> MicroThreadT s m ()
 trace msg = prompt (Trace msg)
 
-warn :: String -> MicroThreadT m ()
+warn :: String -> MicroThreadT s m ()
 warn msg = prompt (Warn msg)
 
-diffTime :: Float -> MicroThreadT m Float
+diffTime :: Float -> MicroThreadT s m Float
 diffTime t0 =
     do t <- prompt GetCurrentTime
        return (t-t0)
@@ -280,7 +298,7 @@ diffTime t0 =
 quantum_ms :: Int
 quantum_ms = 10
 
-runner :: Float -> MicroThreadT m ()
+runner :: Float -> MicroThreadT s m ()
 runner t0 =
     do t <- diffTime t0
        s <- get
@@ -375,7 +393,7 @@ runner t0 =
           Die            -> killThread id
           Abort          -> modify $ \s -> s { abortSystem = True }
 
-      check_invariants :: Thread m -> MicroThreadT m [Invariant m]
+      check_invariants :: Thread s m -> MicroThreadT s m [Invariant s m]
       check_invariants x = do
         r <- foldM check [] (invariants x)
         return r
@@ -387,11 +405,15 @@ runner t0 =
                     else do trace $ "invariant - violation of " ++ show id
                             return $ inv : acc
 
-runMicroThreadT :: (Monad m) => (forall a. Request a -> m a) -> MicroThreadT m () -> m ()
+runMicroThreadT :: (Monad m) =>
+                   (forall a. Request a -> m a) ->
+                   (forall s. (MicroThreadT s m ())) ->
+                   m ()
 runMicroThreadT req bot =
-    let cont = unMicroThreadT (runner 0)
-        stat = runContT cont return
-        pmp = evalStateT stat s0
+    let cont  = unMicroThreadT (runner 0)
+        stat  = runContT cont return
+        st    = evalStateT stat s0
+        pmp   = runST st
     in
       runPromptT return (\p cont -> req p >>= cont) (\m cont -> m >>= cont) pmp 
     where
