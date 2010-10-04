@@ -82,7 +82,9 @@ instance MonadMicroThread (MicroThreadT m) where
                 error $ printf "thread %d trying to hold more than 10 invariants" (show threadID)
            modifyCurrentT $ \t ->
                t { invariants = inv : invs }
-           r <- f
+           finally ( release id threadID ) $ f
+        where
+          release id threadID = do
            threadID' <- getCurrentThread
            when (threadID /= threadID') $
                 error $ printf "inconsistent thread id, expected %d, got %d" threadID threadID'
@@ -90,7 +92,6 @@ instance MonadMicroThread (MicroThreadT m) where
            trace $ "invariant - casual release " ++ show id
            modifyCurrentT $ \t ->
                t { invariants = filter (\i -> inv_id i /= id) (invariants t) }
-           return r
 
     getCurrentThread =
         get >>= \s -> return . threadID . current $ s

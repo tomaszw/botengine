@@ -16,7 +16,7 @@ data Cmd = Abort | Quit | NextTarget | AimTarget | WalkTarget | TargetInfo | Pla
          | Grind
          | Pick
          | Loot
-
+         | HealSelf
 execCmd :: Cmd -> AionBot ()
 execCmd cmd = 
     do --t0 <- time
@@ -40,6 +40,7 @@ execCmd' Backpedal = backpedal
 execCmd' Kill = killTarget
 execCmd' Pick = pickGrindTarget
 execCmd' Loot = loot
+execCmd' HealSelf = healSelf
 execCmd' (Forward secs) = timeout secs $ walk
 execCmd' (Rotate a) = rotateCamera a
 execCmd' _ = error "bad command"
@@ -63,6 +64,7 @@ parseCmd cmd =
       ["d"] -> Just (Strafe StrafeRight)
       ["w"] -> Just Walk
       ["s"] -> Just Backpedal
+      ["heal"] -> Just HealSelf
       ["pick"] -> Just Pick
       ["loot"] -> Just Loot
       ["grind"] -> Just Grind

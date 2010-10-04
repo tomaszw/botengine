@@ -28,6 +28,7 @@ module AionBot ( AionBot
 
                , grind
                , pickGrindTarget
+               , healSelf
                ) where
 
 import Common
@@ -282,8 +283,9 @@ attackTarget =
 -- kill current target
 killTarget :: AionBot ()
 killTarget =
-    getTarget >>= kill
+    getTarget >>= \t -> (withSpark aim $ \_ -> kill t)
     where
+      aim = aimTarget >> delay 2 >> aim
       kill Nothing  = return ()
       kill (Just t) =
           do attackTarget
@@ -312,7 +314,8 @@ select e = do
              withSpark aim $ \_ ->
                  try_select
     case r of
-      Just True -> return True
+      Just True -> do info $ "SELECTED " ++ entity_name e
+                      return True
       _         -> do info $ "failed to select " ++ entity_name e
                       return False
 
@@ -337,7 +340,7 @@ grind =
           do info "grindy grind"
              invariant (not <$> combat_check) (retaliate >> grind) $
                        do hp <- getPlayerHealthPercent
-                          when (hp < 80) (delay 1 >> selfHeal)
+                          when (hp < 80) (delay 1 >> healSelf)
                           pickGrindTarget
              pulled <- withSpark pullTarget $ \_ ->
                  pull_check
@@ -360,7 +363,7 @@ grind =
           do c <- inCombat
              t <- timeSinceCombat
              case () of
-               _ | c == True && t <= 2 -> return True
+               _ | c == True || t <= 2 -> return True
                  | otherwise -> return False
 
 pickGrindTarget :: AionBot ()
@@ -421,10 +424,9 @@ retaliate =
     where
       whack m = do info $ (entity_name m) ++ "'s blood will fill a river"
                    kill m
-                   retaliate
 
-selfHeal :: AionBot ()
-selfHeal =
+healSelf :: AionBot ()
+healSelf =
     do info "Healing myself!" 
        cfg <- getConfig
        execute (heal_self_rotation cfg)
