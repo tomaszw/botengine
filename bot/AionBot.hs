@@ -270,7 +270,7 @@ pullTarget = getTarget >>= pull
       pull Nothing  = return ()
       pull (Just t) =
           do info $ "pulling " ++ (entity_name t)
-             killTarget
+             attackTarget
 
 -- attack current target
 attackTarget :: AionBot ()
@@ -289,6 +289,7 @@ killTarget =
       kill Nothing  = return ()
       kill (Just t) =
           do attackTarget
+             wait inCombat
              withSpark rotate_skills $ \_ ->
                  do wait (isDead . entity_id $ t)
                     info $ "victory, " ++ entity_name t ++ " DIED!"
@@ -338,24 +339,24 @@ grind =
           do info "grindy grind"
              invariant (not <$> combat_check) (retaliate >> grind) $
                        do hp <- getPlayerHealthPercent
-                          when (hp < 80) selfHeal
+                          when (hp < 80) (delay 1 >> selfHeal)
                           pickGrindTarget
-             pulled <- withSpark pullTarget $ \pull_id ->
-                 pull_check pull_id
+             pulled <- withSpark pullTarget $ \_ ->
+                 pull_check
              if pulled
                 then killTarget
                 else info "ABORTED pull"
              grindy_grind
 
       alive = not <$> isPlayerDead
-      pull_check pull_id = do
+      pull_check = do
           -- just make sure noone else is attacking us
           maybe_t <- getTarget
           c <- getCombatants
           case () of
-            _ | Just t <- maybe_t, not (null c), not (t `elem` c) -> terminate pull_id >> return False -- stop pulling, we are attacked by elsewhere
+            _ | Just t <- maybe_t, not (null c), not (t `elem` c) -> return False -- stop pulling, we are attacked by elsewhere
               | Just t <- maybe_t, t `elem` c                     -> return True
-              | otherwise                                         -> delay 0.1 >> pull_check pull_id
+              | otherwise                                         -> delay 0.1 >> pull_check
 
       combat_check =
           do c <- inCombat
@@ -556,7 +557,7 @@ execute r@(Repeat elems) = mapM_ execute_elem elems >> execute r
 execute r@(Once elems)   = mapM_ execute_elem elems
 
 execute_elem :: RotationElem -> AionBot ()
-execute_elem e = {- debug (show e) >> -} execute_elem' e
+execute_elem e = liftIO (putStr "." >> hFlush stdout) >> {- debug (show e) >> -} execute_elem' e
 execute_elem' :: RotationElem -> AionBot ()
 execute_elem' (Rotation nest) = execute nest
 execute_elem' (KeyPress key) = keyPress key
