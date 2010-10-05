@@ -133,13 +133,13 @@ instance MonadMicroThread (MicroThreadT s m) where
            threadID <- getCurrentThread
            when (length invs > 10) $
                 error $ printf "thread %d trying to hold more than 10 invariants" (show threadID)
-           modifyCurrentT $ \t ->
-               t { invariants = inv : invs }
 
            rref <- liftST $ newSTRef Nothing
 
            finally ( release id threadID ) $ do
              spark_id <- spark $ do
+                           modifyCurrentT $ \t ->
+                               t { invariants = inv : invs }
                            r <- action
                            liftST $ writeSTRef rref (Just r)
              waitCompletion spark_id

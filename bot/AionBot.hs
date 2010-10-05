@@ -715,8 +715,8 @@ runAbortableAionBot agent_ch game_state action =
 ioHandler :: (MonadIO m) => UTCTime -> Request a -> m a
 ioHandler t0 (ThreadDelay secs) = liftIO . threadDelay $ round (secs * 10^6)
 ioHandler t0 GetCurrentTime = liftIO $ ioDiffTime t0
---ioHandler t0 (Trace msg) = liftIO . debugIO $ "thread> " ++ msg
-ioHandler t0 (Trace msg) = return ()
+ioHandler t0 (Trace msg) = liftIO . debugIO $ "thread> " ++ msg
+--ioHandler t0 (Trace msg) = return ()
 ioHandler t0 (Warn msg) = liftIO . debugIO $ "WARNING!!! thread> " ++ msg
 
 ioDiffTime :: UTCTime -> IO Float
