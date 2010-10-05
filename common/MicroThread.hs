@@ -56,7 +56,7 @@ data Thread s m = Thread
     {
       contThread :: () -> MicroThreadT s m ()
     , contThreadPred :: MicroThreadT s m Bool
-    , invariants :: [ Invariant s m ]
+    , invariant :: Maybe (Invariant s m)
     , scheduled :: Float
     , threadID :: ThreadID
     , finalisers :: [Finaliser s m]
@@ -64,16 +64,7 @@ data Thread s m = Thread
 
 type Finaliser s m = MicroThreadT s m ()
 
-data Invariant s m = Invariant
-    {
-      inv_id :: InvariantID
-    , inv_hold :: MicroThreadT s m Bool
-    } 
-
-instance Eq (Invariant s m) where
-    a == b = (inv_id a) == (inv_id b)
-
-type InvariantID = Int64
+type Invariant s m = MicroThreadT s m Bool
 
 data Yield s m = Delay Float
              | Spark [Thread s m]
@@ -126,34 +117,15 @@ instance MonadMicroThread (MicroThreadT s m) where
 
     hold condition action =
         do s <- get 
-           let invs = invariants (current s)
-               id   = maxInvariantID (current s) + 1
-               inv  = Invariant id condition
-           trace $ "invariant - acquire " ++ show id
-           threadID <- getCurrentThread
-           when (length invs > 10) $
-                error $ printf "thread %d trying to hold more than 10 invariants" (show threadID)
-
            rref <- liftST $ newSTRef Nothing
-
-           finally ( release id threadID ) $ do
-             spark_id <- spark $ do
-                           modifyCurrentT $ \t ->
-                               t { invariants = inv : invs }
-                           r <- action
-                           liftST $ writeSTRef rref (Just r)
-             waitCompletion spark_id
-             liftST $ readSTRef rref
-
-        where
-          release id threadID = do
-           threadID' <- getCurrentThread
-           when (threadID /= threadID') $
-                error $ printf "inconsistent thread id, expected %d, got %d" threadID threadID'
-
-           trace $ "invariant - casual release " ++ show id
-           modifyCurrentT $ \t ->
-               t { invariants = filter (\i -> inv_id i /= id) (invariants t) }
+           spark_id <-
+               spark $ do
+                 modifyCurrentT $ \t -> t { invariant = Just condition }
+                 finally ( modifyCurrentT $ \t -> t { invariant = Nothing } ) $
+                         do r <- action
+                            liftST $ writeSTRef rref (Just r)
+           waitCompletion spark_id
+           liftST $ readSTRef rref
 
     time = prompt GetCurrentTime
 
@@ -203,10 +175,6 @@ withSpark thread f =
                 when alive $
                      terminate id
 
-maxInvariantID :: Thread s m -> InvariantID
-maxInvariantID t | null (invariants t) = 0
-                 | otherwise = maximum $ map inv_id (invariants t)
-
 instance Show (Yield s m) where
     show (Delay f) = printf "delay %2.4f" f
     show (Spark _) = "spark"
@@ -238,6 +206,14 @@ modifyCurrentT f =
         let c  = f (current s) in
         s { current = c }
 
+modifyThread :: ThreadID -> (Thread s m -> Thread s m) -> MicroThreadT s m ()
+modifyThread thread_id f =
+    modify $ \s -> s { threads = foldl' change [] (threads s) }
+    where
+      change acc th | threadID th == thread_id    = f th : acc
+                    | otherwise                   = th   : acc
+
+
 withT :: (Thread s m -> Thread s m) -> MicroThreadT s m a -> MicroThreadT s m a
 withT mod act =
     do s <- get
@@ -252,7 +228,7 @@ newThread :: ThreadID -> MicroThreadT s m () -> Thread s m
 newThread id thread =
     Thread { contThread = \ _ -> thread
            , contThreadPred = return True
-           , invariants = []
+           , invariant = Nothing
            , scheduled = 0
            , threadID = id
            , finalisers = [] }
@@ -342,32 +318,23 @@ runner t0 =
 
       exec_real thread engine = do
         pred <- contThreadPred thread
-        v <- check_invariants thread
+        v <- check_invariant thread
         case (pred,v) of
-          (False,[]) -> return Nop  -- current predicate does not hold, don't execute
-          (True ,[]) -> -- all is well, execute thread
+          (False,True) -> return Nop  -- current predicate does not hold, don't execute
+          (True ,True) -> -- all is well, execute thread
                do trace $ "executing " ++ show (threadID thread)
                   contThread thread ()
                   s <- get
                   trace $ show (threadID $ current s) ++ " finished"
                   -- if we're here that means thread finished it execution gracefully
                   return Die
-          (_,viols) -> -- if invariants don't hold, kill the thread and invoke specified actions in NEW threads
+          (_,False) -> -- invariant violation
                 do let current_id = threadID thread
                    trace $ "invariant - violation by thread " ++ show current_id
-                   let validate inv | inv `elem` (invariants thread) = return ()
-                                    | otherwise = error $ printf "fatal, invariant %d is not in thread's %d queue" (inv_id inv) current_id
-                   mapM_ validate viols
-                   -- clear invariants for this thread
-                   replace current_id $ thread { invariants = [] }
+                   -- clear invariant for this thread
+                   modifyThread current_id $ \thread -> thread { invariant = Nothing }
                    -- and DIE
                    return Die
-
-      replace thread_id th' =
-          modify $ \s -> s { threads = foldl' f [] (threads s) }
-          where
-            f acc th | threadID th == thread_id    = th' : acc
-                     | otherwise                   = th  : acc
 
       add_sparks ths =
           modify (\s -> s{ spark_threads = spark_threads s ++ ths })
@@ -378,28 +345,21 @@ runner t0 =
         let id = threadID thread
             quantum_dt = fromIntegral quantum_ms / 1000.0
         case yielded of
-          Nop            -> replace id $ thread { scheduled = t + quantum_dt }
-          Delay dt       -> replace id $ thread { scheduled = t + max quantum_dt dt }
+          Nop            -> modifyThread id $ \thread -> thread { scheduled = t + quantum_dt }
+          Delay dt       -> modifyThread id $ \thread -> thread { scheduled = t + max quantum_dt dt }
           Spark th       -> do add_sparks th
-                               replace id $ thread { scheduled = t + quantum_dt }
+                               modifyThread id $ \thread -> thread { scheduled = t + quantum_dt }
           SparkAndDie th -> do add_sparks th
                                killThread id
           Kill id'       -> do killThread id'
-                               replace id $ thread { scheduled = t + quantum_dt }
+                               modifyThread id $ \thread -> thread { scheduled = t + quantum_dt }
           Die            -> killThread id
           Abort          -> modify $ \s -> s { abortSystem = True }
 
-      check_invariants :: Thread s m -> MicroThreadT s m [Invariant s m]
-      check_invariants x = do
-        r <- foldM check [] (invariants x)
-        return r
-        where
-          check acc inv@(Invariant id hold) =
-              do holds <- hold
-                 if holds
-                    then return acc
-                    else do trace $ "invariant - violation of " ++ show id
-                            return $ inv : acc
+      check_invariant x = do
+        case invariant x of
+          Nothing  -> return True
+          Just inv -> inv
 
 runMicroThreadT :: (Monad m) =>
                    (forall a. Request a -> m a) ->
