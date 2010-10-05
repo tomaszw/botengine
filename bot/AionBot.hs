@@ -422,16 +422,25 @@ died =
 -- we were happily doing some interesting stuff when bad things attacked us
 retaliate :: AionBot ()
 retaliate =
-    do t <- timeSinceCombat
-       info $ printf "ROMA VICTA!!!! (retaliating against surprise attack), %f since last combat" t
-       ply  <- getPlayer
-       mobs <- distanceSort (player_pos ply) <$> getCombatants
-       case mobs of
-         [ ]   -> info "nobody to retaliate on :(" >> return ()
-         (m:_) -> whack m
+    do combat <- inCombat
+       when combat $ do
+         info $ printf "ROMA VICTA!!!! (retaliating against surprise attack)"
+         t <- timeout 3 pickAggressor
+         case t of
+           Nothing -> info "FAIL to select an aggressor"
+           Just t  -> whack t
+
     where
-      whack m = do info $ (entity_name m) ++ "'s blood will fill a river"
-                   kill m
+      pickAggressor =
+          do t <- getTarget
+             c <- getCombatants
+             case () of
+               _ | Just t <- t, t `elem` c -> return t
+                 | otherwise               -> nextTarget >> pickAggressor
+
+      whack m =
+          do info $ (entity_name m) ++ "'s blood will fill a river"
+             kill m
 
 healSelf :: AionBot ()
 healSelf =
