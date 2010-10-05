@@ -283,7 +283,7 @@ attackTarget =
 -- kill current target
 killTarget :: AionBot ()
 killTarget =
-    getTarget >>= \t -> (withSpark aim $ \_ -> kill t)
+    getTarget >>= \t -> kill t -- (withSpark aim $ \_ -> kill t)
     where
       aim = aimTarget >> delay 2 >> aim
       kill Nothing  = return ()
@@ -428,7 +428,7 @@ retaliate =
          info $ printf "ROMA VICTA!!!! (retaliating against surprise attack)"
          t <- timeout 3 pickAggressor
          case t of
-           Nothing -> info "FAIL to select an aggressor"
+           Nothing -> info "FAIL to select an aggressor" >> aimAggressor
            Just t  -> whack t
 
     where
@@ -438,6 +438,12 @@ retaliate =
              case () of
                _ | Just t <- t, t `elem` c -> return t
                  | otherwise               -> nextTarget >> pickAggressor
+      aimAggressor =
+          do c <- getCombatants
+             p <- getPlayer
+             case distanceSort (player_pos p) c of
+               (m : _) -> aimEntity m
+               _ -> return ()
 
       whack m =
           do info $ (entity_name m) ++ "'s blood will fill a river"
