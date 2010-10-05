@@ -35,12 +35,43 @@ newtype MicroThreadT s m a = MicroThreadT {
     }
     deriving (Functor, Monad, MonadState (SystemState s m), MonadCont)
 
+data Request a where
+    GetCurrentTime :: Request Float
+    ThreadDelay :: Float -> Request ()
+    Trace :: String -> Request ()
+    Warn :: String -> Request ()
 
-foobar :: MicroThreadT s m Int
-foobar = liftST $
-    do x <- newSTRef 4
-       readSTRef x
+data Thread s m = Thread
+    {
+      contThread :: () -> MicroThreadT s m ()
+    , contThreadPred :: MicroThreadT s m Bool
+    , invariants :: [ Invariant s m ]
+    , scheduled :: Float
+    , threadID :: ThreadID
+    , finalisers :: [Finaliser s m]
+    }
 
+type Finaliser s m = MicroThreadT s m ()
+
+data Invariant s m = Invariant
+    {
+      inv_id :: InvariantID
+    , inv_hold :: MicroThreadT s m Bool
+    , inv_violation :: MicroThreadT s m ()
+    } 
+
+instance Eq (Invariant s m) where
+    a == b = (inv_id a) == (inv_id b)
+
+type InvariantID = Int64
+
+data Yield s m = Delay Float
+             | Spark [Thread s m]
+             | SparkAndDie [Thread s m]
+             | Nop
+             | Die
+             | Kill ThreadID
+             | Abort
 
 liftST :: STT s (PromptT Request m) a -> MicroThreadT s m a
 liftST = MicroThreadT . lift . lift
@@ -155,44 +186,6 @@ withSpark thread f =
              do alive <- isThreadAlive id
                 when alive $
                      terminate id
-
-data Request a where
-    GetCurrentTime :: Request Float
-    ThreadDelay :: Float -> Request ()
-    Trace :: String -> Request ()
-    Warn :: String -> Request ()
-
-data Thread s m = Thread
-    {
-      contThread :: () -> MicroThreadT s m ()
-    , contThreadPred :: MicroThreadT s m Bool
-    , invariants :: [ Invariant s m ]
-    , scheduled :: Float
-    , threadID :: ThreadID
-    , finalisers :: [Finaliser s m]
-    }
-
-type Finaliser s m = MicroThreadT s m ()
-
-data Invariant s m = Invariant
-    {
-      inv_id :: InvariantID
-    , inv_hold :: MicroThreadT s m Bool
-    , inv_violation :: MicroThreadT s m ()
-    } 
-
-instance Eq (Invariant s m) where
-    a == b = (inv_id a) == (inv_id b)
-
-type InvariantID = Int64
-
-data Yield s m = Delay Float
-             | Spark [Thread s m]
-             | SparkAndDie [Thread s m]
-             | Nop
-             | Die
-             | Kill ThreadID
-             | Abort
 
 maxInvariantID :: Thread s m -> InvariantID
 maxInvariantID t | null (invariants t) = 0
@@ -407,7 +400,7 @@ runner t0 =
 
 runMicroThreadT :: (Monad m) =>
                    (forall a. Request a -> m a) ->
-                   (forall s. (MicroThreadT s m ())) ->
+                   (forall s. MicroThreadT s m ()) ->
                    m ()
 runMicroThreadT req bot =
     let cont  = unMicroThreadT (runner 0)

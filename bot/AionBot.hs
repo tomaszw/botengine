@@ -54,15 +54,20 @@ import Math
 import Keys
 import AionBotConfig
 
-newtype AionBot a = AionBot { unBot :: MicroThreadT (StateT BotState IO) a }
+-- is there a better way
+newtype AionBot_ s a = AionBot_ { unBot :: MicroThreadT s (StateT BotState IO) a }
     deriving ( Functor, Monad, MonadMicroThread )
 
+type AionBot a = forall s. AionBot_ s a
+
+instance MonadIO (AionBot_ s) where
+    liftIO = AionBot_ . lift . lift
+
+liftState :: StateT BotState IO a -> AionBot_ s a
+liftState = AionBot_ . lift
+
+-------
 data StrafeDirection = StrafeLeft | StrafeRight
-
-instance MonadIO AionBot where
-    liftIO = AionBot . lift . lift
-
-liftState = AionBot . lift
 
 getChannel :: AionBot (CommandChannel IO)
 getChannel =
