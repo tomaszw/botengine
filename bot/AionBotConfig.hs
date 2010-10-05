@@ -29,7 +29,7 @@ defaultConfig =
                                , qb 6, Delay 0.1
                                , aqb 2, Delay 0.1
                                , aqb 5, Delay 0.1 ]
-    , heal_self_rotation = Once [ qb 8, Delay 4.0
+    , heal_self_rotation = Once [ qb 8, Delay 5.0
                                 , qb 9 ]
     , loot_key = keyQuickbarBase + 0
     -- grind mob this number of levels higher/lower

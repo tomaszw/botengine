@@ -114,8 +114,8 @@ instance MonadMicroThread (MicroThreadT s m) where
            yield $ Kill threadID
 
     wait cond =
-        withT (\t -> t { contThreadPred = cond }) $
-              yield Nop
+        do modifyCurrentT $ \t -> t { contThreadPred = cond }
+           yield Nop
 
     hold condition action =
         do rref <- liftST $ newSTRef Nothing
@@ -138,14 +138,19 @@ instance MonadMicroThread (MicroThreadT s m) where
     time = prompt GetCurrentTime
 
     finally guard f =
-        do trace $ "FINALLY BEGIN"
-           r <- withT t' $ f
+        do t <- getCurrentThread
+           trace $ show t ++ " FINALLY BEGIN"
+           s <- get
+           let fins = finalisers (current s)
+           modifyCurrentT $ \t -> t { finalisers = guard' : fins }
+           r <- f
+           modifyCurrentT $ \t -> t { finalisers = fins }
            guard'
            return r
         where t' t = t {
                        finalisers = guard' : (finalisers t)
                      }
-              guard' = trace ("FINALLY END") >> guard
+              guard' = getCurrentThread >>= \t -> trace (show t ++ " FINALLY END") >> guard
 
     -- destroys all threads
     abort =
@@ -224,6 +229,7 @@ modifyThread thread_id f =
                     | otherwise                   = th   : acc
 
 
+{-
 withT :: (Thread s m -> Thread s m) -> MicroThreadT s m a -> MicroThreadT s m a
 withT mod act =
     do s <- get
@@ -233,6 +239,7 @@ withT mod act =
        r <- act
        modify $ \s -> s { current = c }
        return r
+-}
 
 newThread :: ThreadID -> (Maybe ThreadID) -> MicroThreadT s m () -> Thread s m
 newThread id parent_id thread =
@@ -347,20 +354,21 @@ runner t0 =
           False -> exec_real thread engine
 
       exec_real thread engine = do
+        let current_id = threadID thread
         pred <- contThreadPred thread
         v <- check_invariant thread
         case (pred,v) of
           (False,True) -> return Nop  -- current predicate does not hold, don't execute
           (True ,True) -> -- all is well, execute thread
                do trace $ "executing " ++ show (threadID thread)
+                  modifyThread current_id $ \thread -> thread { contThreadPred = return True }
                   contThread thread ()
                   s <- get
                   trace $ show (threadID $ current s) ++ " finished"
                   -- if we're here that means thread finished it execution gracefully
                   return Die
           (_,False) -> -- invariant violation
-                do let current_id = threadID thread
-                   trace $ "invariant - violation by thread " ++ show current_id
+                do trace $ "invariant - violation by thread " ++ show current_id
                    -- clear invariant for this thread
                    modifyThread current_id $ \thread -> thread { invariant = Nothing }
                    -- and DIE

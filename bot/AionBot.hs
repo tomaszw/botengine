@@ -266,7 +266,7 @@ pullTarget = getTarget >>= pull where
     pull (Just t) =
         do info $ "pulling " ++ (entity_name t)
            attackTarget
-           wait inCombat
+           noStuck attackTarget $ wait inCombat
            c <- getCombatants
            case () of
              _ | t `elem` c -> return True  -- we managed to pull the correct target
@@ -290,12 +290,12 @@ killTarget =
       kill Nothing  = return ()
       kill (Just t) =
           do attackTarget
-             noStuck $ wait inCombat
+             noStuck attackTarget $ wait inCombat
              withSpark rotate_skills $ \_ ->
                  do wait (isDead . entity_id $ t)
                     info $ "victory, " ++ entity_name t ++ " DIED!"
-                    s <- safe
-                    when s $
+                    c <- inCombat
+                    when ( not c ) $
                          loot
       rotate_skills =
           do c <- getConfig
@@ -350,7 +350,7 @@ grind =
                      when (hp < 80) (delay 1 >> healSelf)
                      pickGrindTarget
              case saf of
-               Nothing -> retaliate -- we got attacked
+               Nothing -> retaliate >> delay 0.25 -- we got attacked
                Just () ->
                    do pulled <- pullTarget
                       case () of
@@ -468,11 +468,14 @@ distanceSort p es = sortBy (comparing distance) es
                    len (p' $- p)
 
 -- don't get stuck when executing action
-noStuck :: AionBot a -> AionBot a
-noStuck action =
+noStuck :: AionBot () -> AionBot a -> AionBot a
+noStuck afterUnstuck action =
     do p0 <- player_pos <$> getPlayer
        t0 <- time
-       withSpark (detector p0 0 t0) $ \_ -> action
+       debug "trying to not get stuck now.."
+       r <- withSpark (detector p0 0 t0) $ \_ -> action
+       debug "done with stuckness detection"
+       return r
   where
     detector p0 dp t0 =
         do p <- player_pos <$> getPlayer
@@ -480,7 +483,8 @@ noStuck action =
            let dp' = dp + len (p $- p0)
                dt  = t - t0
                v   = if dt /= 0 then dp' / dt else 0
-           when (dt >= 3 && v < 1) unstuck
+           debug $ "v=" ++ show v
+           when (dt >= 3 && v < 0.5) ( unstuck >> afterUnstuck )
            delay 0.01
            detector p dp' t0
 
@@ -614,8 +618,15 @@ isFullHealth id =
       test (Just e) = return (entity_hp e == 100)
 
 execute :: Rotation -> AionBot ()
-execute r@(Repeat elems) = mapM_ execute_elem elems >> execute r
-execute r@(Once elems)   = mapM_ execute_elem elems
+execute r =
+    do t <- getCurrentThread
+       info $ printf "thread %d executing rotation %s" t (show r)
+       execute' r
+       info $ printf "thread %d done with rotation." t
+
+execute' :: Rotation -> AionBot ()
+execute' r@(Repeat elems) = mapM_ execute_elem elems >> execute r
+execute' r@(Once elems)   = mapM_ execute_elem elems
 
 execute_elem :: RotationElem -> AionBot ()
 execute_elem e = liftIO (putStr "." >> hFlush stdout) >> {- debug (show e) >> -} execute_elem' e
