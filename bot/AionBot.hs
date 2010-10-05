@@ -106,7 +106,7 @@ keyPress code =
 
 -- place mouse in safe spot for performing clicks (no mobs, no ui elements)
 parkMouse :: AionBot ()
-parkMouse = centerMouse -- mouseTo 0.33 0.1 >> delay 0.1
+parkMouse = mouseTo 0.33 0.1 >> delay 0.1 -- centerMouse -- mouseTo 0.33 0.1 >> delay 0.1
 
 centerMouse :: AionBot ()
 centerMouse = mouseTo 50 50 >> delay 0.1
@@ -376,7 +376,8 @@ safe =
 
 pickGrindTarget :: AionBot ()
 pickGrindTarget =
-    do picked <- timeout 2 $ pickStatic
+    do debug "LOOKING FOR GRIND TARGET!"
+       picked <- timeout 2 $ pickStatic
        case picked of
          Just True -> debug "PICKED grind target!"
          _         -> debug "ROTATE, repeat" >> rotateCamera 60 >> pickGrindTarget
