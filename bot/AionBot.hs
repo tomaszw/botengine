@@ -297,14 +297,19 @@ killTarget =
       aim = aimTarget >> delay 2 >> aim
       kill Nothing  = return ()
       kill (Just t) =
-          do attackTarget
-             noStuck attackTarget $ wait inCombat
-             withSpark rotate_skills $ \_ ->
-                 do wait (isDead . entity_id $ t)
-                    info $ "victory, " ++ entity_name t ++ " DIED!"
-             c <- inCombat
-             when ( not c ) $
+          do won <- hold (amTargetting t) $ do
+               attackTarget
+               noStuck attackTarget $ wait inCombat
+               withSpark rotate_skills $ \_ ->
+                   do wait (isDead . entity_id $ t)
+                      info $ "victory, " ++ entity_name t ++ " DIED!"
+                      return True
+             when (won == Just True) $ do
+               c <- inCombat
+               when ( not c ) $
                   loot
+             return ()
+
       rotate_skills =
           do c <- getConfig
              info $ "executing combat rotation!"
@@ -314,6 +319,9 @@ killTarget =
 kill :: Entity -> AionBot ()
 kill t = do s <- select t
             when s $ killTarget
+
+amTargetting :: Entity -> AionBot Bool
+amTargetting e = getTarget >>= \t -> return (t == Just e)
 
 --
 loot :: AionBot ()
@@ -389,10 +397,10 @@ safe =
 pickGrindTarget :: AionBot ()
 pickGrindTarget =
     do debug "LOOKING FOR GRIND TARGET!"
-       picked <- timeout 2 $ pickStatic
+       picked <- timeout 3 $ pickStatic
        case picked of
          Just True -> debug "PICKED grind target!"
-         _         -> debug "ROTATE, repeat" >> rotateCamera 60 >> pickGrindTarget
+         _         -> debug "ROTATE, repeat" >> spark (rotateCamera 60) >> pickGrindTarget
     where
       pickStatic :: AionBot Bool
       pickStatic = do
@@ -468,6 +476,9 @@ healSelf =
        execute (heal_self_rotation cfg)
        wait ( getPlayerHealthPercent >>= \p -> return $ p == 100 )
        info "HEALTH FULL"
+       -- standup
+       keyPress ( keyQuickbarBase + 9 )
+       delay 1
 
 distanceSort :: Vec3 -> [Entity] -> [Entity]
 distanceSort p es = sortBy (comparing distance) es
@@ -504,7 +515,7 @@ noStuck afterUnstuck action =
            let !ps' = (p,t) : takeWhile ( \(p',t') -> t - t' < 2 ) ps
                !v = speed ps'
            debug $ "v=" ++ show v
-           if (length ps' < 10 || t - t0 < 2)
+           if (length ps' < 10 || t - t0 < 3)
               then detector t0 ps'
               else do if (v < 0.5)
                         then do unstuck 
@@ -704,14 +715,13 @@ getEntity id = liftState get >>= \s -> return $ M.lookup id (entity_map s)
 getEntities :: AionBot [Entity]
 getEntities = liftState get >>= return . entities
 
--- access current player target. don't return dead mobs
+-- access current player target
 getTarget :: AionBot (Maybe Entity)
 getTarget =
     do p <- getPlayerEntity
        e <- getEntity (entity_target_id p)
        case e of
-         Just e | not (isDeadPure e),
-                  (entity_id e /= 0) -> return $ Just e
+         Just e | (entity_id e /= 0) -> return $ Just e
          _ -> return Nothing
 
 -- all targetting given entity

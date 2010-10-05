@@ -116,7 +116,7 @@ instance MonadMicroThread (MicroThreadT s m) where
     withSpark thread f =
         do current <- getCurrentThread
            id <- pickThreadID
-           trace $ "sparking " ++ show id
+           trace $ "sparking " ++ show id ++ " as temp job"
            finally ( maybe_terminate id ) $
                do yield (Spark [newThread id (Just current) thread])
                   f id
