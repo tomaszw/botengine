@@ -5,6 +5,7 @@ module MicroThread
     , waitCompletion
     , waitForever
     , withSpark
+    , timeout
     , runMicroThreadT
     ) where
 
@@ -41,6 +42,16 @@ data Request a where
     Trace :: String -> Request ()
     Warn :: String -> Request ()
 
+data SystemState s m = SystemState
+    {
+      jumpout :: Yield s m -> MicroThreadT s m ()
+    , current :: Thread s m
+    , threads :: [Thread s m]
+    , spark_threads :: [Thread s m]
+    , max_thread_id :: ThreadID
+    , abortSystem :: Bool
+    }
+
 data Thread s m = Thread
     {
       contThread :: () -> MicroThreadT s m ()
@@ -57,7 +68,6 @@ data Invariant s m = Invariant
     {
       inv_id :: InvariantID
     , inv_hold :: MicroThreadT s m Bool
-    , inv_violation :: MicroThreadT s m ()
     } 
 
 instance Eq (Invariant s m) where
@@ -84,14 +94,15 @@ instance MonadTrans (MicroThreadT s) where
 
 class (Monad m) => MonadMicroThread m where
     delay :: Float -> m ()
+    wait :: m Bool -> m ()
+    time :: m Float
+    hold :: m Bool -> m a -> m (Maybe a)
+    finally :: m () -> m a -> m a
+
     spark :: m () -> m ThreadID
     terminate :: ThreadID -> m ()
     abort :: m ()
-    wait :: m Bool -> m ()
-    time :: m Float
-    timeout :: Float -> m () -> m ()
-    invariant :: m Bool -> m () -> m a -> m a
-    finally :: m () -> m a -> m a
+
     getCurrentThread :: m ThreadID
     isThreadAlive :: ThreadID -> m Bool
 
@@ -113,25 +124,27 @@ instance MonadMicroThread (MicroThreadT s m) where
         withT (\t -> t { contThreadPred = cond }) $
               yield Nop
 
-    isThreadAlive id =
-        do s <- get
-           let ids = map threadID $ threads s
-           return $ id `elem` ids
-
-    -- if invariant does not hold at any point of execution of given block,
-    -- terminate current thread and spark a new one (passed as violated arg)
-    invariant hold violated f =
+    hold condition action =
         do s <- get 
            let invs = invariants (current s)
                id   = maxInvariantID (current s) + 1
-               inv  = Invariant id hold violated
+               inv  = Invariant id condition
            trace $ "invariant - acquire " ++ show id
            threadID <- getCurrentThread
            when (length invs > 10) $
                 error $ printf "thread %d trying to hold more than 10 invariants" (show threadID)
            modifyCurrentT $ \t ->
                t { invariants = inv : invs }
-           finally ( release id threadID ) $ f
+
+           rref <- liftST $ newSTRef Nothing
+
+           finally ( release id threadID ) $ do
+             spark_id <- spark $ do
+                           r <- action
+                           liftST $ writeSTRef rref (Just r)
+             waitCompletion spark_id
+           liftST $ readSTRef rref
+
         where
           release id threadID = do
            threadID' <- getCurrentThread
@@ -141,9 +154,6 @@ instance MonadMicroThread (MicroThreadT s m) where
            trace $ "invariant - casual release " ++ show id
            modifyCurrentT $ \t ->
                t { invariants = filter (\i -> inv_id i /= id) (invariants t) }
-
-    getCurrentThread =
-        get >>= \s -> return . threadID . current $ s
 
     time = prompt GetCurrentTime
 
@@ -155,20 +165,26 @@ instance MonadMicroThread (MicroThreadT s m) where
                        finalisers = guard : (finalisers t)
                      }
 
-    timeout max_t f =
-        time >>= run
-        where
-          run t0 = do
-            id <- spark $ do
-                     let testTimeout = time >>= \t -> return $ t - t0 < max_t
-                     invariant testTimeout (return ()) f
-            waitCompletion id
-
     -- destroys all threads
     abort =
         do s <- get
            trace $ "ABORT CALLED, current threads: " ++ show (map threadID (threads s))
            yield Abort
+
+    getCurrentThread =
+        get >>= \s -> return . threadID . current $ s
+
+    isThreadAlive id =
+        do s <- get
+           let ids = map threadID $ threads s
+           return $ id `elem` ids
+
+timeout :: (MonadMicroThread m) => Float -> m a -> m (Maybe a)
+timeout max_t f =
+    do t0 <- time
+       hold (no_timeout t0) f
+    where
+      no_timeout t0 = time >>= \t -> return $ t - t0 < max_t
 
 waitCompletion :: (MonadMicroThread m) => ThreadID -> m ()
 waitCompletion id = wait (isThreadAlive id >>= return . not)
@@ -199,16 +215,6 @@ instance Show (Yield s m) where
     show Nop = "nop"
     show (Kill id) = "kill " ++ show id
     show Abort = "abort"
-
-data SystemState s m = SystemState
-    {
-      jumpout :: Yield s m -> MicroThreadT s m ()
-    , current :: Thread s m
-    , threads :: [Thread s m]
-    , spark_threads :: [Thread s m]
-    , max_thread_id :: ThreadID
-    , abortSystem :: Bool
-    }
 
 yield :: Yield s m -> MicroThreadT s m ()
 yield y =
@@ -354,11 +360,8 @@ runner t0 =
                    mapM_ validate viols
                    -- clear invariants for this thread
                    replace current_id $ thread { invariants = [] }
-                   -- spark invariant actions
-                   id <- pickThreadID
-                   -- FIXME HMM spark all ?
-                   let t = newThread id (inv_violation $ head viols)
-                   return $ SparkAndDie [t]
+                   -- and DIE
+                   return Die
 
       replace thread_id th' =
           modify $ \s -> s { threads = foldl' f [] (threads s) }
@@ -391,7 +394,7 @@ runner t0 =
         r <- foldM check [] (invariants x)
         return r
         where
-          check acc inv@(Invariant id hold violated) =
+          check acc inv@(Invariant id hold) =
               do holds <- hold
                  if holds
                     then return acc

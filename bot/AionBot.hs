@@ -100,17 +100,6 @@ keyPress code =
                 do liftIO $ sendCommand c (ChangeKeyState Down code) 
                    delay 0.05
 
----
---- FIXME: how to do this in core microthread monad?
----
-timeoutWithRVal :: Float -> AionBot a -> AionBot (Maybe a)
-timeoutWithRVal max_t action =
-    do mvar <- liftIO $ newEmptyMVar
-       timeout max_t $
-               do r <- action
-                  liftIO $ putMVar mvar r
-       liftIO . tryTakeMVar $ mvar
-
 ----
 ---- Control Commands
 ----
@@ -162,6 +151,7 @@ rotateCamera delta =
        liftIO $ sendCommand ch (OrientCamera t_r)
        -- wait until rotation matches
        timeout 2.0 (waitToRotateCamera t_r)
+       return ()
     
 -- aim given direction
 aimDirection :: Vec3 -> AionBot ()
@@ -315,7 +305,7 @@ loot = getConfig >>= \c -> keyPress (loot_key c)
 -- select entity, max few secs to try to select it
 select :: Entity -> AionBot Bool
 select e = do
-    r <- timeoutWithRVal 3.0 $ do
+    r <- timeout 3.0 $ do
              withSpark aim $ \_ ->
                  try_select
     case r of
@@ -339,19 +329,25 @@ select e = do
 grind :: AionBot ()
 grind =
     do info "HAPPY GRIND!"
-       invariant alive died $ grindy_grind
+       r <- hold alive $ grindy_grind
+       case r of
+         Nothing -> died >> grind
+         Just () -> grind
     where
       grindy_grind =
           do info "grindy grind"
-             invariant (not <$> combat_check) (retaliate >> grind) $
+             r <- hold (not <$> combat_check) $
                        do hp <- getPlayerHealthPercent
                           when (hp < 80) (delay 1 >> healSelf)
                           pickGrindTarget
-             pulled <- withSpark pullTarget $ \_ ->
-                 pull_check
-             if pulled
-                then killTarget
-                else info "ABORTED pull"
+             case r of
+               Nothing -> retaliate
+               Just () -> do
+                      pulled <- withSpark pullTarget $ \_ ->
+                          pull_check
+                      if pulled
+                        then killTarget
+                        else info "ABORTED pull"
              grindy_grind
 
       alive = not <$> isPlayerDead
@@ -373,7 +369,7 @@ grind =
 
 pickGrindTarget :: AionBot ()
 pickGrindTarget =
-    do picked <- timeoutWithRVal 2 $ pickStatic
+    do picked <- timeout 2 $ pickStatic
        case picked of
          Just True -> debug "PICKED grind target!"
          _         -> debug "ROTATE, repeat" >> rotateCamera 60 >> pickGrindTarget

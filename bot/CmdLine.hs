@@ -41,7 +41,7 @@ execCmd' Kill = killTarget
 execCmd' Pick = pickGrindTarget
 execCmd' Loot = loot
 execCmd' HealSelf = healSelf
-execCmd' (Forward secs) = timeout secs $ walk
+execCmd' (Forward secs) = timeout secs walk >> return ()
 execCmd' (Rotate a) = rotateCamera a
 execCmd' _ = error "bad command"
 

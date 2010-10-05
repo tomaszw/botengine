@@ -21,4 +21,5 @@ Executable bot
         utf8-string,
         network,
         network-bytestring,
-        MonadPrompt
+        MonadPrompt,
+        STMonadTrans
