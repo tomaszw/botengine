@@ -237,8 +237,9 @@ walkTo maxtime p =
           False -> do aimPoint p
                       withSpark keepAim $ \_ ->
                           do keyState Down keyForward
-                             timeout maxtime walk
-                             keyState Up keyForward
+                             finally ( keyState Up keyForward ) $
+                                     timeout maxtime walk
+                             return ()
   where
     walk = finished >>= \f ->
            case f of
@@ -257,14 +258,18 @@ walkToTarget maxtime =
     where walk Nothing = return ()
           walk (Just t) = walkTo maxtime (entity_pos t)
 
--- pull current target
-pullTarget :: AionBot ()
-pullTarget = getTarget >>= pull
-    where
-      pull Nothing  = return ()
-      pull (Just t) =
-          do info $ "pulling " ++ (entity_name t)
-             attackTarget
+-- pull current target. false if we didn't, or pulled wrong target
+pullTarget :: AionBot Bool
+pullTarget = getTarget >>= pull where
+    pull Nothing  = return False
+    pull (Just t) =
+        do info $ "pulling " ++ (entity_name t)
+           attackTarget
+           wait inCombat
+           c <- getCombatants
+           case () of
+             _ | t `elem` c -> return True  -- we managed to pull the correct target
+               | otherwise  -> return False -- uh we're in combat with someone else
 
 -- attack current target
 attackTarget :: AionBot ()
@@ -336,18 +341,17 @@ grind =
     where
       grindy_grind =
           do info "grindy grind"
-             r <- hold (not <$> combat_check) $
-                       do hp <- getPlayerHealthPercent
-                          when (hp < 80) (delay 1 >> healSelf)
-                          pickGrindTarget
-             case r of
-               Nothing -> retaliate
-               Just () -> do
-                      pulled <- withSpark pullTarget $ \_ ->
-                          pull_check
-                      if pulled
-                        then killTarget
-                        else info "ABORTED pull"
+             saf <- hold safe $
+                  do hp <- getPlayerHealthPercent
+                     when (hp < 80) (delay 1 >> healSelf)
+                     pickGrindTarget
+             case saf of
+               Nothing -> retaliate -- we got attacked
+               Just () ->
+                   do pulled <- pullTarget
+                      case () of
+                        _ | pulled    -> killTarget
+                          | otherwise -> info "ABORTED PULL"
              grindy_grind
 
       alive = not <$> isPlayerDead
@@ -360,12 +364,15 @@ grind =
               | Just t <- maybe_t, t `elem` c                     -> return True
               | otherwise                                         -> delay 0.1 >> pull_check
 
-      combat_check =
-          do c <- inCombat
-             t <- timeSinceCombat
-             case () of
-               _ | c == True || t <= 2 -> return True
-                 | otherwise -> return False
+
+safe :: AionBot Bool
+safe =
+    do c   <- inCombat
+       t   <- timeSinceCombat
+       cfg <- getConfig
+       case () of
+         _ | c == False && t >= safe_margin cfg -> return True
+           | otherwise -> return False
 
 pickGrindTarget :: AionBot ()
 pickGrindTarget =

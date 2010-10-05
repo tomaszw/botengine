@@ -143,7 +143,7 @@ instance MonadMicroThread (MicroThreadT s m) where
                            r <- action
                            liftST $ writeSTRef rref (Just r)
              waitCompletion spark_id
-           liftST $ readSTRef rref
+             liftST $ readSTRef rref
 
         where
           release id threadID = do

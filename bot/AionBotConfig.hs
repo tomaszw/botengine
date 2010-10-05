@@ -15,6 +15,7 @@ data AionBotConfig = AionBotConfig
     , loot_key :: KeyCode
     , threshold_grind_upper_level :: Int
     , threshold_grind_lower_level :: Int
+    , safe_margin :: Float
     }
 
 defaultConfig :: AionBotConfig
@@ -34,6 +35,7 @@ defaultConfig =
     -- grind mob this number of levels higher/lower
     , threshold_grind_upper_level = 1
     , threshold_grind_lower_level = 5
+    , safe_margin = 2
     }
     where
       -- quickbar
