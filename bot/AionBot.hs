@@ -35,6 +35,7 @@ import Common
 import Data.Binary ( encode )
 import Data.Map (Map)
 import Data.Maybe
+
 import System.Random
 import Data.Time
 import Data.Time.Clock
@@ -283,6 +284,10 @@ attackTarget =
     attack Nothing  = return ()
     attack (Just t) = do info $ "attacking " ++ (entity_name t)
                          keyPress keyAttack
+                         keyPress keyAttack
+                         keyPress keyAttack
+                         keyPress keyAttack
+                         keyPress keyAttack
 
 -- kill current target
 killTarget :: AionBot ()
@@ -499,7 +504,7 @@ noStuck afterUnstuck action =
            let !ps' = (p,t) : takeWhile ( \(p',t') -> t - t' < 2 ) ps
                !v = speed ps'
            debug $ "v=" ++ show v
-           if (length ps' < 10)
+           if (length ps' < 10 || t - t0 < 2)
               then detector t0 ps'
               else do if (v < 0.5)
                         then do unstuck 
@@ -553,9 +558,10 @@ combatExpirator period =
        liftState . put $ s { combat_map = combat' }
        delay period
        ply <- getPlayer
+       ents <- catMaybes <$> mapM getEntity (map combat_id combat')
        when (length combat' > 0) $
-            info $ printf "in combat with %d monsters. HP = %d." (length combat') (player_hp ply)
-       when (not . null $ combat') $
+            info $ printf "in combat with %d monsters. HP = %d : %s." (length ents) (player_hp ply) (show $ map entity_name ents)
+       when (not . null $ ents) $
             do t <- time
                liftState . modify $ \s -> s { combat_last_time_ply = t }
        combatExpirator period
@@ -564,7 +570,7 @@ combatExpirator period =
       expire acc m@(CombatMob id target_t0) =
           do e <- getEntity id
              let dead = case e of
-                          Nothing -> False -- let it expire by timer
+                          Nothing -> True
                           Just e  -> isDeadPure e
              t <- time
              if dead || t - target_t0 > 4

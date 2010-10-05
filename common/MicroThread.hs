@@ -4,7 +4,6 @@ module MicroThread
     , Request (..)
     , waitCompletion
     , waitForever
-    , withSpark
     , timeout
     , runMicroThreadT
     ) where
@@ -95,6 +94,8 @@ class (Monad m) => MonadMicroThread m where
     finally :: m () -> m a -> m a
 
     spark :: m () -> m ThreadID
+    withSpark :: m () -> (ThreadID -> m a) -> m a
+
     terminate :: ThreadID -> m ()
     abort :: m ()
 
@@ -111,6 +112,19 @@ instance MonadMicroThread (MicroThreadT s m) where
            trace $ "sparking " ++ show id
            yield (Spark [newThread id (Just current) thread])
            return id
+
+    withSpark thread f =
+        do current <- getCurrentThread
+           id <- pickThreadID
+           trace $ "sparking " ++ show id
+           finally ( maybe_terminate id ) $
+               do yield (Spark [newThread id (Just current) thread])
+                  f id
+        where
+          maybe_terminate id =
+              do alive <- isThreadAlive id
+                 when alive $
+                      terminate id
 
     terminate threadID =
         do trace $ "terminating " ++ show threadID
@@ -144,10 +158,20 @@ instance MonadMicroThread (MicroThreadT s m) where
         do t <- getCurrentThread
            s <- get
            let fins = finalisers (current s)
-               id   = maximum (M.keys fins) + 1
+               id   = case M.keys fins of
+                        [] -> 0
+                        _  -> maximum (M.keys fins) + 1
            trace $ show t ++ " FINALLY BEGIN id=" ++ show id
            modifyCurrentT $ \t -> t { finalisers = M.insert id (guard' id) $ finalisers t }
+
            r <- f
+
+           t <- getCurrentThread
+           s <- get
+           let fins = finalisers (current s)
+           when (not $ id `elem` M.keys fins) $
+                error $ printf "FATAL NO FINALISER %d for thread %d" id t
+
            modifyCurrentT $ \t -> t { finalisers = M.delete id $ finalisers t }
            guard' id
            return r
@@ -180,17 +204,6 @@ waitCompletion id = wait (isThreadAlive id >>= return . not)
 waitForever :: (MonadMicroThread m) => m ()
 waitForever = wait ( return False )
     
-withSpark :: (MonadMicroThread m) => m () -> (ThreadID -> m a) -> m a
-withSpark thread f =
-    do new_id <- spark thread
-       finally (maybe_terminate new_id) $
-               f new_id
-       where
-         maybe_terminate id =
-             do alive <- isThreadAlive id
-                when alive $
-                     terminate id
-
 instance Show (Yield s m) where
     show (Delay f) = printf "delay %2.4f" f
     show (Spark _) = "spark"
