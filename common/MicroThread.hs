@@ -272,12 +272,12 @@ killThread thread_id =
     do ds <- descendants thread_id
        -- kill all descendant threads first
        mapM_ killThread ( reverse . sort $ ds )
-       -- then rest
-       trace $ "killing " ++ show thread_id
        thread <- getThread thread_id
        case thread of
          Just thread ->
-             do modify  $ \s -> s { threads = filter p (threads s) }
+             do trace $ "killing " ++ show thread_id
+                -- appease finalisers
+                modify $ \s -> s { current = thread, threads = filter p (threads s) }
                 -- execute any finalisers
                 let fs = finalisers thread
                 when (not . null $ fs) $
