@@ -116,14 +116,17 @@ instance MonadMicroThread (MicroThreadT s m) where
               yield Nop
 
     hold condition action =
-        do s <- get 
-           rref <- liftST $ newSTRef Nothing
+        do rref <- liftST $ newSTRef Nothing
            spark_id <-
                spark $ do
-                 modifyCurrentT $ \t -> t { invariant = Just condition }
-                 finally ( modifyCurrentT $ \t -> t { invariant = Nothing } ) $
-                         do r <- action
-                            liftST $ writeSTRef rref (Just r)
+                 id <- getCurrentThread
+                 trace $ printf "thread %d holding new invariant" id
+                 modifyThread id $ \t -> t { invariant = Just condition }
+                 finally ( do trace $ printf "thread %d releasing invariant" id
+                              modifyThread id $ \t -> t { invariant = Nothing }
+                         ) $
+                       do r <- action
+                          liftST $ writeSTRef rref (Just r)
            waitCompletion spark_id
            liftST $ readSTRef rref
 
@@ -345,14 +348,14 @@ runner t0 =
         let id = threadID thread
             quantum_dt = fromIntegral quantum_ms / 1000.0
         case yielded of
-          Nop            -> modifyThread id $ \thread -> thread { scheduled = t + quantum_dt }
-          Delay dt       -> modifyThread id $ \thread -> thread { scheduled = t + max quantum_dt dt }
+          Nop            -> modifyThread id $ \ _ -> thread { scheduled = t + quantum_dt }
+          Delay dt       -> modifyThread id $ \ _ -> thread { scheduled = t + max quantum_dt dt }
           Spark th       -> do add_sparks th
-                               modifyThread id $ \thread -> thread { scheduled = t + quantum_dt }
+                               modifyThread id $ \ _ -> thread { scheduled = t + quantum_dt }
           SparkAndDie th -> do add_sparks th
                                killThread id
           Kill id'       -> do killThread id'
-                               modifyThread id $ \thread -> thread { scheduled = t + quantum_dt }
+                               modifyThread id $ \ _ -> thread { scheduled = t + quantum_dt }
           Die            -> killThread id
           Abort          -> modify $ \s -> s { abortSystem = True }
 
