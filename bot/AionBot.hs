@@ -802,7 +802,7 @@ ioDiffTime t0 =
        return . realToFrac $ diffUTCTime t1 t0
 
 info :: String -> AionBot ()
-info s = liftIO (putStrLn s)
+info s = debug s >> liftIO (putStrLn s)
 
 debug :: String -> AionBot ()
 debug s = 

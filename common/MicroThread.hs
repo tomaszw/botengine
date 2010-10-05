@@ -20,6 +20,8 @@ import Text.Printf
 import Data.List
 import Data.Ord
 import Data.Int
+import Data.Map (Map)
+import qualified Data.Map as M
 import System.IO
 
 type ThreadID = Int
@@ -60,10 +62,11 @@ data Thread s m = Thread
     , scheduled :: Float
     , threadID :: ThreadID
     , parentID :: Maybe ThreadID
-    , finalisers :: [Finaliser s m]
+    , finalisers :: Map FinaliserID (Finaliser s m)
     }
 
 type Finaliser s m = MicroThreadT s m ()
+type FinaliserID   = Int64
 
 type Invariant s m = MicroThreadT s m Bool
 
@@ -139,18 +142,16 @@ instance MonadMicroThread (MicroThreadT s m) where
 
     finally guard f =
         do t <- getCurrentThread
-           trace $ show t ++ " FINALLY BEGIN"
            s <- get
            let fins = finalisers (current s)
-           modifyCurrentT $ \t -> t { finalisers = guard' : fins }
+               id   = maximum (M.keys fins) + 1
+           trace $ show t ++ " FINALLY BEGIN id=" ++ show id
+           modifyCurrentT $ \t -> t { finalisers = M.insert id (guard' id) $ finalisers t }
            r <- f
-           modifyCurrentT $ \t -> t { finalisers = fins }
-           guard'
+           modifyCurrentT $ \t -> t { finalisers = M.delete id $ finalisers t }
+           guard' id
            return r
-        where t' t = t {
-                       finalisers = guard' : (finalisers t)
-                     }
-              guard' = getCurrentThread >>= \t -> trace (show t ++ " FINALLY END") >> guard
+        where guard' id = getCurrentThread >>= \t -> trace (show t ++ " FINALLY END id=" ++ show id) >> guard
 
     -- destroys all threads
     abort =
@@ -249,7 +250,7 @@ newThread id parent_id thread =
            , scheduled = 0
            , threadID = id
            , parentID = parent_id
-           , finalisers = [] }
+           , finalisers = M.empty }
 
 getThread :: ThreadID -> MicroThreadT s m (Maybe (Thread s m))
 getThread id =
@@ -286,7 +287,7 @@ killThread thread_id =
                 -- appease finalisers
                 modify $ \s -> s { current = thread, threads = filter p (threads s) }
                 -- execute any finalisers
-                let fs = finalisers thread
+                let fs = M.elems $ finalisers thread
                 when (not . null $ fs) $
                      trace $ printf "%d has finalisers, executing" thread_id
                 sequence_ fs
