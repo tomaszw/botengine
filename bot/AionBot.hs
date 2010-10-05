@@ -1,4 +1,4 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving, GADTs, ExistentialQuantification, MultiParamTypeClasses, RankNTypes #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving, GADTs, ExistentialQuantification, MultiParamTypeClasses, RankNTypes, BangPatterns #-}
 module AionBot ( AionBot
                , runAionBot
                , runAbortableAionBot
@@ -75,30 +75,31 @@ getChannel =
     do s <- liftState get
        return $ agent_channel s
 
+sendCommand' ch cmd = debug (show cmd) >> liftIO (sendCommand ch cmd)
 
 ----
 ---- Wrappers around some comm channel functions so we don't have to pass channel everywhere
 ----
 click btn =
     getChannel >>= \c ->
-        finally (liftIO $ sendCommand c (ChangeMouseState Up btn)) $
-                do liftIO $ sendCommand c (ChangeMouseState Down btn)
+        finally (sendCommand' c (ChangeMouseState Up btn)) $
+                do sendCommand' c (ChangeMouseState Down btn)
                    delay 0.05
 
 mouseTo x y =
     getChannel >>= \c ->
-        do liftIO $ sendCommand c $ AbsMoveMousePerc x y
+        do sendCommand' c $ AbsMoveMousePerc x y
            delay 0.01
 
 keyState state code =
     getChannel >>= \c ->
-        do liftIO $ sendCommand c $ ChangeKeyState state code
+        do sendCommand' c $ ChangeKeyState state code
            delay 0.05
 
 keyPress code =
     getChannel >>= \c ->
-        finally (liftIO $ sendCommand c (ChangeKeyState Up code)) $
-                do liftIO $ sendCommand c (ChangeKeyState Down code) 
+        finally (sendCommand' c (ChangeKeyState Up code)) $
+                do sendCommand' c (ChangeKeyState Down code) 
                    delay 0.05
 
 ----
@@ -149,7 +150,7 @@ rotateCamera delta =
     do c <- getCamera
        let t_r = snap $ camera_rot c + delta
        ch <- getChannel
-       liftIO $ sendCommand ch (OrientCamera t_r)
+       sendCommand' ch (OrientCamera t_r)
        -- wait until rotation matches
        timeout 2.0 (waitToRotateCamera t_r)
        return ()
@@ -479,7 +480,7 @@ noStuck afterUnstuck action =
   where
     speed :: [ (Vec3,Float) ] -> Float
     speed []  = 0
-    speed [_] = 0
+    speed [x] = 0
     speed ((p0,t0):(p1,t1):xs) =
         speed ((p1,t1):xs) + ( if dt /= 0
                                   then dp/dt
@@ -487,17 +488,17 @@ noStuck afterUnstuck action =
                              )
         where
           dp = len (p1 $- p0)
-          dt = t1 - t0
+          dt = abs (t1 - t0)
 
-    detector t0 ps =
+    detector !t0 !ps =
         do p <- player_pos <$> getPlayer
            t <- time
-           let ps' = (p,t) : takeWhile (\(p',t') -> t - t' <= 3) ps
+           let ps' = (p,t) : take 100 ps
+               v = speed ps
+           debug $ "v=" ++ show v
            if (t - t0) < 1
               then detector t0 ps'
-              else do let v = speed ps'
-                      debug $ "v=" ++ show v
-                      when (v < 0.5) ( unstuck >> afterUnstuck )
+              else do when (v < 0.5) ( unstuck >> afterUnstuck )
                       delay 0.01
                       detector t0 ps'
 
@@ -506,12 +507,13 @@ unstuck :: AionBot ()
 unstuck =
     do info "TRYING TO GET UNSTUCK!"
        (act :: Int) <- liftIO $ randomRIO (0,3)
-       timeout 4 $
+       timeout 3 $
                case act of
                  0 -> strafe StrafeLeft
                  1 -> strafe StrafeRight
                  2 -> backpedal
                  _ -> return ()
+       info "TRIED"
        return ()
 
 
@@ -639,6 +641,8 @@ execute r =
 
 execute' :: Rotation -> AionBot ()
 execute' r@(Repeat elems) = mapM_ execute_elem elems >> execute r
+execute' r@(RepeatN 0 elems) = return ()
+execute' r@(RepeatN n elems) = mapM_ execute_elem elems >> execute (RepeatN (n-1) elems)
 execute' r@(Once elems)   = mapM_ execute_elem elems
 
 execute_elem :: RotationElem -> AionBot ()
@@ -795,4 +799,6 @@ info :: String -> AionBot ()
 info s = liftIO (putStrLn s)
 
 debug :: String -> AionBot ()
-debug s = liftIO (debugIO s)
+debug s = 
+    do t <- getCurrentThread
+       liftIO (debugIO $ show t ++ ": " ++ s)
