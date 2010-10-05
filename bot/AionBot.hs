@@ -294,9 +294,9 @@ killTarget =
              withSpark rotate_skills $ \_ ->
                  do wait (isDead . entity_id $ t)
                     info $ "victory, " ++ entity_name t ++ " DIED!"
-                    c <- inCombat
-                    when ( not c ) $
-                         loot
+             c <- inCombat
+             when ( not c ) $
+                  loot
       rotate_skills =
           do c <- getConfig
              info $ "executing combat rotation!"
@@ -309,7 +309,7 @@ kill t = do s <- select t
 
 --
 loot :: AionBot ()
-loot = getConfig >>= \c -> keyPress (loot_key c)
+loot = delay 0.5 >> info "LOOTING!" >> getConfig >>= \c -> keyPress (loot_key c)
 
 -- select entity, max few secs to try to select it
 select :: Entity -> AionBot Bool
