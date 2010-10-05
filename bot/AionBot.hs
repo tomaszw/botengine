@@ -35,6 +35,7 @@ import Common
 import Data.Binary ( encode )
 import Data.Map (Map)
 import Data.Maybe
+import System.Random
 import Data.Time
 import Data.Time.Clock
 import qualified Data.ByteString.Lazy as BL
@@ -289,10 +290,13 @@ killTarget =
       kill Nothing  = return ()
       kill (Just t) =
           do attackTarget
-             wait inCombat
+             noStuck $ wait inCombat
              withSpark rotate_skills $ \_ ->
                  do wait (isDead . entity_id $ t)
                     info $ "victory, " ++ entity_name t ++ " DIED!"
+                    s <- safe
+                    when s $
+                         loot
       rotate_skills =
           do c <- getConfig
              info $ "executing combat rotation!"
@@ -462,6 +466,38 @@ distanceSort p es = sortBy (comparing distance) es
     where
       distance e = let p' = entity_pos e in
                    len (p' $- p)
+
+-- don't get stuck when executing action
+noStuck :: AionBot a -> AionBot a
+noStuck action =
+    do p0 <- player_pos <$> getPlayer
+       t0 <- time
+       withSpark (detector p0 0 t0) $ \_ -> action
+  where
+    detector p0 dp t0 =
+        do p <- player_pos <$> getPlayer
+           t <- time
+           let dp' = dp + len (p $- p0)
+               dt  = t - t0
+               v   = if dt /= 0 then dp' / dt else 0
+           when (dt >= 3 && v < 1) unstuck
+           delay 0.01
+           detector p dp' t0
+
+-- try to get unstuck
+unstuck :: AionBot ()
+unstuck =
+    do info "TRYING TO GET UNSTUCK!"
+       (act :: Int) <- liftIO $ randomRIO (0,3)
+       timeout 4 $
+               case act of
+                 0 -> strafe StrafeLeft
+                 1 -> strafe StrafeRight
+                 2 -> backpedal
+                 _ -> return ()
+       return ()
+
+
 ----
 ---- Bot state
 ----
