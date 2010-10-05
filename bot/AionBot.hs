@@ -473,20 +473,33 @@ noStuck afterUnstuck action =
     do p0 <- player_pos <$> getPlayer
        t0 <- time
        debug "trying to not get stuck now.."
-       r <- withSpark (detector p0 0 t0) $ \_ -> action
+       r <- withSpark (detector t0 []) $ \_ -> action
        debug "done with stuckness detection"
        return r
   where
-    detector p0 dp t0 =
+    speed :: [ (Vec3,Float) ] -> Float
+    speed []  = 0
+    speed [_] = 0
+    speed ((p0,t0):(p1,t1):xs) =
+        speed ((p1,t1):xs) + ( if dt /= 0
+                                  then dp/dt
+                                  else 0
+                             )
+        where
+          dp = len (p1 $- p0)
+          dt = t1 - t0
+
+    detector t0 ps =
         do p <- player_pos <$> getPlayer
            t <- time
-           let dp' = dp + len (p $- p0)
-               dt  = t - t0
-               v   = if dt /= 0 then dp' / dt else 0
-           debug $ "v=" ++ show v
-           when (dt >= 3 && v < 0.5) ( unstuck >> afterUnstuck )
-           delay 0.01
-           detector p dp' t0
+           let ps' = (p,t) : takeWhile (\(p',t') -> t - t' <= 3) ps
+           if (t - t0) < 1
+              then detector t0 ps'
+              else do let v = speed ps'
+                      debug $ "v=" ++ show v
+                      when (v < 0.5) ( unstuck >> afterUnstuck )
+                      delay 0.01
+                      detector t0 ps'
 
 -- try to get unstuck
 unstuck :: AionBot ()
