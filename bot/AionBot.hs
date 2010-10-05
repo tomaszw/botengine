@@ -267,7 +267,9 @@ pullTarget = getTarget >>= pull where
     pull (Just t) =
         do info $ "pulling " ++ (entity_name t)
            attackTarget
-           noStuck attackTarget $ wait inCombat
+           timeout 15 $
+                   noStuck attackTarget $
+                           wait inCombat
            c <- getCombatants
            case () of
              _ | t `elem` c -> return True  -- we managed to pull the correct target
@@ -491,20 +493,20 @@ noStuck afterUnstuck action =
           dt = abs (t1 - t0)
 
     detector !t0 !ps =
-        do p <- player_pos <$> getPlayer
+        do delay 0.05
+           p <- player_pos <$> getPlayer
            t <- time
-           let ps' = (p,t) : take 100 ps
-               v = speed ps'
+           let !ps' = (p,t) : takeWhile ( \(p',t') -> t - t' < 2 ) ps
+               !v = speed ps'
            debug $ "v=" ++ show v
-           if (t - t0) < 1
+           if (length ps' < 10)
               then detector t0 ps'
               else do if (v < 0.5)
                         then do unstuck 
                                 afterUnstuck
                                 t <- time
                                 detector t []
-                        else do delay 0.033
-                                detector t0 ps'
+                        else do detector t0 ps'
 
 -- try to get unstuck
 unstuck :: AionBot ()
