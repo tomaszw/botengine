@@ -494,13 +494,17 @@ noStuck afterUnstuck action =
         do p <- player_pos <$> getPlayer
            t <- time
            let ps' = (p,t) : take 100 ps
-               v = speed ps
+               v = speed ps'
            debug $ "v=" ++ show v
            if (t - t0) < 1
               then detector t0 ps'
-              else do when (v < 0.5) ( unstuck >> afterUnstuck )
-                      delay 0.01
-                      detector t0 ps'
+              else do if (v < 0.5)
+                        then do unstuck 
+                                afterUnstuck
+                                t <- time
+                                detector t []
+                        else do delay 0.033
+                                detector t0 ps'
 
 -- try to get unstuck
 unstuck :: AionBot ()
