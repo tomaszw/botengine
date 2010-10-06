@@ -375,12 +375,14 @@ runner t0 =
           | otherwise       = iteration x >> handle' t xs
 
       iteration thread =
-          do yield <- callCC $ exec thread -- execute it upto yield
-             -- the thread context might've been modified during execution, we have fetch it from current
-             s <- get
-             let thread' = current s
-             trace $ show (threadID thread') ++ " yield: " ++ show yield
-             reschedule thread' yield
+          do s <- get
+             when ( threadID thread `elem` (map threadID $ threads s) ) $ do
+               yield <- callCC $ exec thread -- execute it upto yield
+               -- the thread context might've been modified during execution, we have fetch it from current
+               s <- get
+               let thread' = current s
+               trace $ show (threadID thread') ++ " yield: " ++ show yield
+               reschedule thread' yield
       
       exec thread engine = do
         trace $ "CONTEXT SWITCH to " ++ show (threadID thread)

@@ -529,7 +529,7 @@ noStuck afterUnstuck action =
 unstuck :: AionBot ()
 unstuck =
     do info "TRYING TO GET UNSTUCK!"
-       (act :: Int) <- liftIO $ randomRIO (0,3)
+       (act :: Int) <- liftIO $ randomRIO (0,2)
        timeout 3 $
                case act of
                  0 -> strafe StrafeLeft
