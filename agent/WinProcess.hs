@@ -20,7 +20,7 @@ newtype WinProcess = WinProcess Win32.PHANDLE
 
 foreign import ccall "find_module_by_name" c_find_module_by_name :: Ptr () -> CString -> IO Word32
 foreign import ccall "open_process_by_window_name" c_open_process_by_window_name :: CString -> IO ( Ptr () )
-foreign import ccall "read_process_memory" c_read_process_memory :: Ptr () -> Word32 -> Word32 -> Ptr Word8 -> IO ()
+foreign import ccall "read_process_memory" c_read_process_memory :: Ptr () -> Word32 -> Word32 -> Ptr Word8 -> IO CInt
 
 openGameProcess :: String -> IO WinProcess
 openGameProcess winname =
@@ -33,6 +33,6 @@ instance (MonadIO m) => Process m WinProcess where
         withCString name $ \nameS -> c_find_module_by_name p nameS
     processReadMemory (WinProcess p) addr len =
         liftIO $
-               do str <- create len $ \ptr -> c_read_process_memory p addr (fromIntegral len) ptr
+               do str <- create len $ \ptr -> (c_read_process_memory p addr (fromIntegral len) ptr >> return ())
                   return $ B.fromChunks [str]
            

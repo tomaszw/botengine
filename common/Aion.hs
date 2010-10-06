@@ -11,6 +11,7 @@ import Data.Binary.IEEE754
 import Data.Int
 import Data.Char
 import Data.Bits
+import Data.List
 import qualified Data.ByteString.Lazy as B
 import Process
 
@@ -185,8 +186,13 @@ getEntityList c =
     do game_dll <- processGetModuleHandle c "Game.dll"
        addr_list <- peekWord32 c (game_dll + entityListOffset)
        array_addr <- peekWord32 c (addr_list + 0x48)
-       node_addr <- peekWord32 c array_addr
-       getEntityList' c node_addr
+       count <- peekWord32 c (addr_list + 0x58)
+       --node_addr <- peekWord32 c array_addr
+       node_addrs <- mapM (\i -> peekWord32 c (array_addr + i*4)) [0..(count-1)]
+       lists <- mapM (getEntityList' c) node_addrs
+       return . join $ lists
+    where
+      join lists = nub . concat $ lists
 
 getEntityList' c node =
     do entity_addr <- peekWord32 c (node + 0x0c)

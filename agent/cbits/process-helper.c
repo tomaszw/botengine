@@ -83,10 +83,14 @@ HANDLE open_process_by_window_name( const char *name )
   return 0;
 }
 
-void read_process_memory( HANDLE process, DWORD addr, DWORD len, void *data )
+DWORD read_process_memory( HANDLE process, DWORD addr, DWORD len, void *data )
 {
-  SIZE_T num_read;
-  ReadProcessMemory( process, (LPVOID*) addr, data, len, &num_read );
+  SIZE_T num_read = 0;
+  memset( data, 0, len );
+  if (!ReadProcessMemory( process, (LPVOID*) addr, data, len, &num_read )) {
+    return 0;
+  }
+  return num_read;
 }
 
 

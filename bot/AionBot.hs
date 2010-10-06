@@ -490,9 +490,8 @@ distanceSort p es = sortBy (comparing distance) es
 noStuck :: AionBot () -> AionBot a -> AionBot a
 noStuck afterUnstuck action =
     do p0 <- player_pos <$> getPlayer
-       t0 <- time
        debug "trying to not get stuck now.."
-       r <- withSpark (detector t0 []) $ \_ -> action
+       r <- withSpark (delay 3 >> time >>= \t0 -> detector t0 []) $ \_ -> action
        debug "done with stuckness detection"
        return r
   where
@@ -515,7 +514,8 @@ noStuck afterUnstuck action =
            let !ps' = (p,t) : takeWhile ( \(p',t') -> t - t' < 2 ) ps
                !v = speed ps'
            debug $ "v=" ++ show v
-           if (length ps' < 10 || t - t0 < 3)
+           c <- inCombat 
+           if (length ps' < 10 || t - t0 < 3 || c)
               then detector t0 ps'
               else do if (v < 0.5)
                         then do unstuck 
@@ -646,7 +646,13 @@ isDead id =
 isPlayerDead :: AionBot Bool
 isPlayerDead =
     do p <- getPlayer
-       isDead (player_id p)
+       dead <- isDead (player_id p)
+       when (dead) $
+            do info "DEAD"
+               e <- getPlayerEntity
+               debug (show p)
+               debug (show e)
+       return dead
        
 isFullHealth :: EntityID -> AionBot Bool
 isFullHealth id =
