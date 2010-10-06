@@ -114,6 +114,6 @@ createGameControlChannel sock  =
     do let ch = channelFromTCPSocket sock
        return $ CommandChannel
                   { 
-                    ch_send = \cmd -> {- liftIO (debugIO $ "send-l " ++ show cmd) >> -} sendLengthEncodedPacket ch cmd
+                    ch_send = \cmd -> liftIO (debugIO $ "send-l " ++ show cmd) >> sendLengthEncodedPacket ch cmd
                   , ch_read = readLengthEncodedPacket ch
                   }

@@ -370,7 +370,7 @@ grind =
                Just () ->
                    do pulled <- pullTarget
                       case () of
-                        _ | pulled    -> killTarget
+                        _ | pulled    -> debug "pulled, killing " >> killTarget
                           | otherwise -> info "ABORTED PULL"
              grindy_grind
 
@@ -422,6 +422,7 @@ suitableGrindTarget t =
 
        case () of
          _ | dead                       -> return False -- don't kill corpses
+           | entity_type t /= ENPC      -> return False
            | not (level_ok ply cfg)     -> return False -- don't kill out of level range
            | its_target_type == EPlayer -> return False -- don't kill if targetting other player
            | otherwise                  -> return True
@@ -550,6 +551,7 @@ data BotState = BotState { agent_channel    :: CommandChannel IO
                          , combat_map           :: [CombatMob]
                          , combat_last_time_ply :: Float
                          , config               :: AionBotConfig
+                         , current_rotation     :: Maybe Rotation
                          }
 
 -- state of combat with given mob
@@ -665,20 +667,29 @@ execute :: Rotation -> AionBot ()
 execute r =
     do t <- getCurrentThread
        info $ printf "thread %d executing rotation %s" t (show r)
-       execute' r
-       info $ printf "thread %d done with rotation." t
+       s <- liftState get
+       case current_rotation s of
+         Nothing -> return ()
+         Just r  -> do info $ printf "BUT THERE IS ALREADY %s in progress!!" (show (current_rotation s))
+                       error "another rotation in progress"
+
+       liftState . modify $ \s -> s { current_rotation = Just r }
+       finally ( do liftState . modify $ \s -> s { current_rotation = Nothing }
+                    info $ printf "thread %d done with rotation." t
+               ) $
+               execute' r
 
 execute' :: Rotation -> AionBot ()
-execute' r@(Repeat elems) = mapM_ execute_elem elems >> execute r
+execute' r@(Repeat elems) = mapM_ execute_elem elems >> execute' r
 execute' r@(RepeatN 0 elems) = return ()
-execute' r@(RepeatN n elems) = mapM_ execute_elem elems >> execute (RepeatN (n-1) elems)
+execute' r@(RepeatN n elems) = mapM_ execute_elem elems >> execute' (RepeatN (n-1) elems)
 execute' r@(Once elems)   = mapM_ execute_elem elems
 
 execute_elem :: RotationElem -> AionBot ()
 execute_elem e = liftIO (putStr "." >> hFlush stdout) >> {- debug (show e) >> -} execute_elem' e
 execute_elem' :: RotationElem -> AionBot ()
 execute_elem' (Delay dt) = delay dt
-execute_elem' (Rotation nest) = execute nest
+execute_elem' (Rotation nest) = execute' nest
 execute_elem' (KeyPress key) = keyPress key
 execute_elem' (HoldModKeyPress mod key) =
     finally ( keyState Up mod ) $
@@ -780,6 +791,7 @@ runAionBot agent_ch game_state aionbot =
     s0 =
          BotState { agent_channel = agent_ch
                   , camera = undefined
+                  , current_rotation = Nothing
                   , player = undefined
                   , entities = undefined
                   , entity_map = undefined

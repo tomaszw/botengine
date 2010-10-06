@@ -20,6 +20,7 @@ import Data.List
 import Data.Ord
 import Data.Int
 import Data.Map (Map)
+import Data.Maybe
 import qualified Data.Map as M
 import System.IO
 
@@ -56,13 +57,16 @@ data SystemState s m = SystemState
 data Thread s m = Thread
     {
       contThread :: () -> MicroThreadT s m ()
-    , contThreadPred :: MicroThreadT s m Bool
+    , contThreadPred :: Maybe (MicroThreadT s m Bool)
     , invariant :: Maybe (Invariant s m)
     , scheduled :: Float
     , threadID :: ThreadID
     , parentID :: Maybe ThreadID
     , finalisers :: Map FinaliserID (Finaliser s m)
     }
+
+instance Show (Thread s m) where
+    show t = printf "\n   ->id=%s parent=%s invariant=%s wait=%s" (show . threadID $ t) (show . parentID $ t) (show . isJust $ invariant t) (show . isJust $ contThreadPred t)
 
 type Finaliser s m = MicroThreadT s m ()
 type FinaliserID   = Int64
@@ -102,7 +106,11 @@ class (Monad m) => MonadMicroThread m where
     getCurrentThread :: m ThreadID
     isThreadAlive :: ThreadID -> m Bool
 
+    trace :: String -> m ()
+
 instance MonadMicroThread (MicroThreadT s m) where
+    trace msg = prompt (Trace msg)
+
     delay dt =
         yield (Delay dt)
 
@@ -131,11 +139,13 @@ instance MonadMicroThread (MicroThreadT s m) where
            yield $ Kill threadID
 
     wait cond =
-        do modifyCurrentT $ \t -> t { contThreadPred = cond }
+        do modifyCurrentT $ \t -> t { contThreadPred = Just cond }
            yield Nop
 
     hold condition action =
         do rref <- liftST $ newSTRef Nothing
+           current <- getCurrentThread
+           trace $ printf "thread %d going to spark-with-invariant" current
            spark_id <-
                spark $ do
                  id <- getCurrentThread
@@ -199,7 +209,11 @@ timeout max_t f =
       no_timeout t0 = time >>= \t -> return $ t - t0 < max_t
 
 waitCompletion :: (MonadMicroThread m) => ThreadID -> m ()
-waitCompletion id = wait (isThreadAlive id >>= return . not)
+waitCompletion id = 
+    do current <- getCurrentThread
+       trace $ printf "%d waiting for completion of %d" current id
+       wait (isThreadAlive id >>= return . not)
+       trace $ printf "%d FINISHED waiting for completion of %d" current id
 
 waitForever :: (MonadMicroThread m) => m ()
 waitForever = wait ( return False )
@@ -258,7 +272,7 @@ withT mod act =
 newThread :: ThreadID -> (Maybe ThreadID) -> MicroThreadT s m () -> Thread s m
 newThread id parent_id thread =
     Thread { contThread = \ _ -> thread
-           , contThreadPred = return True
+           , contThreadPred = Nothing
            , invariant = Nothing
            , scheduled = 0
            , threadID = id
@@ -309,9 +323,6 @@ killThread thread_id =
   where
     p t = threadID t /= thread_id
 
-trace :: String -> MicroThreadT s m ()
-trace msg = prompt (Trace msg)
-
 warn :: String -> MicroThreadT s m ()
 warn msg = prompt (Warn msg)
 
@@ -327,13 +338,15 @@ runner :: Float -> MicroThreadT s m ()
 runner t0 =
     do t <- diffTime t0
        s <- get
-       trace $ printf "----> %05.3f -> tick, %d threads" t (length $ threads s)
+       trace $ printf "----> %05.3f -> tick, %d threads: %s" t (length $ threads s) (show $ threads s)
 
        handle t (threads s)
        -- apply sparked threads onto thread heap
        s <- get
        modify (\s -> s { threads = spark_threads s ++ (threads s)
                        , spark_threads = [ ] })
+       -- remove orphans
+       del_orphans
        -- quit if no threads are left
        s <- get
        case threads s of
@@ -343,6 +356,18 @@ runner t0 =
                   prompt $ ThreadDelay (fromIntegral quantum_ms / 1000.0)
                   runner t0
     where
+      del_orphans =
+          do s <- get
+             let ts = (threads s)
+             put $ s { threads = no_orphans ts }
+          where
+            no_orphans [] = []
+            no_orphans (t:ts) = case parentID t of
+                                  Nothing -> t : no_orphans ts
+                                  Just p  -> if (p `elem` (map threadID ts))
+                                               then t : no_orphans ts
+                                               else no_orphans ts
+
       handle t threads = handle' t (sortBy (comparing scheduled) threads)
       handle' t [] = return ()
       handle' t (x:xs)
@@ -369,13 +394,15 @@ runner t0 =
 
       exec_real thread engine = do
         let current_id = threadID thread
-        pred <- contThreadPred thread
+        pred <- case contThreadPred thread of
+                  Just p -> p
+                  Nothing -> return True
         v <- check_invariant thread
         case (pred,v) of
           (False,True) -> return Nop  -- current predicate does not hold, don't execute
           (True ,True) -> -- all is well, execute thread
                do trace $ "executing " ++ show (threadID thread)
-                  modifyThread current_id $ \thread -> thread { contThreadPred = return True }
+                  modifyThread current_id $ \thread -> thread { contThreadPred = Nothing }
                   contThread thread ()
                   s <- get
                   trace $ show (threadID $ current s) ++ " finished"
@@ -403,8 +430,8 @@ runner t0 =
                                modifyThread id $ \ _ -> thread { scheduled = t + quantum_dt }
           SparkAndDie th -> do add_sparks th
                                killThread id
-          Kill id'       -> do killThread id'
-                               modifyThread id $ \ _ -> thread { scheduled = t + quantum_dt }
+          Kill id'       -> do modifyThread id $ \ _ -> thread { scheduled = t + quantum_dt }
+                               killThread id'
           Die            -> killThread id
           Abort          -> modify $ \s -> s { abortSystem = True }
 
