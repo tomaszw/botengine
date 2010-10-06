@@ -62,7 +62,7 @@ runCommandServer p w =
              (client,addr) <- accept sock
              let updates_addr | SockAddrInet _ host_addr <- addr = SockAddrInet port host_addr
                               | otherwise                        = error "unexpected address"
-             updates <- forkIO $ runStateUpdatesSender updates_addr p 20
+             updates <- forkIO $ runStateUpdatesSender updates_addr p 10
              handle (client,addr)
              killThread updates
 
@@ -99,7 +99,7 @@ runStateUpdatesSender addr p delay_ms =
              threadDelay $ delay_ms * 1000
              updates ch (i+1)
           where
-            big_update = i `mod` 10 == 0
+            big_update = i `mod` 3 == 0
 
 data ConversationState = ConversationState { cameraOrienter :: MVar ThreadId }
 

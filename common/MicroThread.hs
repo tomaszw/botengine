@@ -359,14 +359,14 @@ runner t0 =
       del_orphans =
           do s <- get
              let ts = (threads s)
-             put $ s { threads = no_orphans ts }
+             mapM_ (kill_orphans ts) ts
           where
-            no_orphans [] = []
-            no_orphans (t:ts) = case parentID t of
-                                  Nothing -> t : no_orphans ts
-                                  Just p  -> if (p `elem` (map threadID ts))
-                                               then t : no_orphans ts
-                                               else no_orphans ts
+            kill_orphans ts t =
+                case parentID t of
+                  Nothing -> return ()
+                  Just p  -> if (p `elem` (map threadID ts))
+                               then return ()
+                               else trace "orphan detected" >> killThread (threadID t)
 
       handle t threads = handle' t (sortBy (comparing scheduled) threads)
       handle' t [] = return ()

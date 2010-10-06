@@ -23,7 +23,7 @@ updateGameState cmd s =
     where
       update ( UpdateCamera c ) = writeIORef (game_camera s) c
       update ( UpdatePlayer p ) = writeIORef (game_player s) p
-      update ( UpdateEntities e ) = writeIORef (game_entities s) e
+      update ( UpdateEntities e ) = hPutStrLn stderr "UPDATE ENTITIES" >> writeIORef (game_entities s) e
       update _ = hPutStrLn stderr $ "unhandled update command: " ++ show cmd
 
 -- run state update server

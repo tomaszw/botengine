@@ -188,7 +188,7 @@ getEntityList c =
        array_addr <- peekWord32 c (addr_list + 0x48)
        count <- peekWord32 c (addr_list + 0x58)
        --node_addr <- peekWord32 c array_addr
-       node_addrs <- mapM (\i -> peekWord32 c (array_addr + i*4)) [0..(count-1)]
+       node_addrs <- mapM (\i -> peekWord32 c (array_addr + i*4)) [0..0] --(count-1)]
        lists <- mapM (getEntityList' c) node_addrs
        return . join $ lists
     where
