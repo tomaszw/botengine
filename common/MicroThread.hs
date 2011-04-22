@@ -95,6 +95,7 @@ class (Monad m) => MonadMicroThread m where
     wait :: m Bool -> m ()
     time :: m Float
     hold :: m Bool -> m a -> m (Maybe a)
+    react :: m Bool -> m () -> m a -> m a
     finally :: m () -> m a -> m a
 
     spark :: m () -> m ThreadID
@@ -141,6 +142,11 @@ instance MonadMicroThread (MicroThreadT s m) where
     wait cond =
         do modifyCurrentT $ \t -> t { contThreadPred = Just cond }
            yield Nop
+
+    react condition reaction action =
+        withSpark reactions $ \_ -> action
+        where
+          reactions = wait condition >> reaction >> reactions
 
     hold condition action =
         do rref <- liftST $ newSTRef Nothing
