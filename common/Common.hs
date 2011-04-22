@@ -29,8 +29,9 @@ import Data.Time
 import Data.Time.Clock
 
 debugIO :: String -> IO ()
-debugIO s =
-    do t <- getCurrentTime
-       hPutStrLn stderr $ (show t) ++ ": " ++ s
-       hFlush stderr
+debugIO s = return ()
+
+--    do t <- getCurrentTime
+--       hPutStrLn stderr $ (show t) ++ ": " ++ s
+--       hFlush stderr
 

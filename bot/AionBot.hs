@@ -2,7 +2,7 @@
 module AionBot ( AionBot
                , runAionBot
                , runAbortableAionBot
-               , parkMouse
+
                , getPlayer
                , getPlayerEntity
                , getTarget
@@ -12,6 +12,7 @@ module AionBot ( AionBot
 
                , StrafeDirection (..)
 
+               , parkMouse
                , aimTarget
                , nextTarget
                , rotateCamera
@@ -21,6 +22,7 @@ module AionBot ( AionBot
                , backpedal
                , jump
                , walkToTarget
+               , travel
 
                , killTarget
                , kill
@@ -55,6 +57,7 @@ import GameState
 import Math
 import Keys
 import AionBotConfig
+import Waypoints
 
 -- is there a better way
 newtype AionBot_ s a = AionBot_ { unBot :: MicroThreadT s (StateT BotState IO) a }
@@ -188,14 +191,10 @@ nextTarget :: AionBot ()
 nextTarget =
     do t <- getTarget
        keyPress keyNextTarget
-       timeout 2 (next t)
+       timeout 0.75 (next t)
        return ()
   where
-    next t =
-        do t' <- getTarget
-           case () of
-             _ | t == t'   -> delay 0.25 >> next t
-               | otherwise -> return ()
+    next t = wait $ getTarget >>= \t' -> return $ t /= t'
 
 finishWalkThreshold :: Float
 finishWalkThreshold = 10
@@ -232,8 +231,8 @@ backpedal =
                waitForever
 
 -- walk up to given point
-walkTo :: Float -> Vec3 -> AionBot ()
-walkTo maxtime p =
+walkTo :: Vec3 -> AionBot ()
+walkTo p =
     finished >>= \f ->
         case f of
           True  -> return ()
@@ -241,7 +240,7 @@ walkTo maxtime p =
                       withSpark keepAim $ \_ ->
                           do keyState Down keyForward
                              finally ( keyState Up keyForward ) $
-                                     timeout maxtime walk
+                                     walk
                              return ()
   where
     walk = finished >>= \f ->
@@ -255,22 +254,55 @@ walkTo maxtime p =
                return $ dist <= finishWalkThreshold
 
 -- walk up to target
-walkToTarget :: Float -> AionBot ()
-walkToTarget maxtime =
+walkToTarget :: AionBot ()
+walkToTarget =
     getTarget >>= walk
     where walk Nothing = return ()
-          walk (Just t) = walkTo maxtime (entity_pos t)
+          walk (Just t) = walkTo (entity_pos t)
 
+-- travel through waypoints
+travel :: [String] -> AionBot ()
+travel names =
+    do waypoints <- resolveWaypoints names
+       travelWaypoints waypoints
+       return ()
+
+resolveWaypoints :: [String] -> AionBot [Waypoint]
+resolveWaypoints names =
+    mapM resolve names
+    where
+      resolve n =
+          do cfg <- getConfig
+             let pts = waypoints cfg
+                 p   = find n pts
+             return p
+      find n pts = case filter match pts of
+                     (p:_) -> p
+                     _     -> error $ "could not find waypoint " ++ n
+                   where
+                     match p = n == waypoint_name p
+
+travelWaypoints :: [Waypoint] -> AionBot Bool
+travelWaypoints [] = info "TRAVEL FINISHED!" >> return True
+travelWaypoints (w:ws) =
+    do info $ "HEADING TOWARDS " ++ waypoint_name w
+       r <- timeout 360 $ walkTo (waypoint_p w)
+       case r of
+         Nothing -> do info $ "TRAVEL TO " ++ waypoint_name w ++ " FAILED, took over 360s, aborting"
+                       return False
+         Just _  -> travelWaypoints ws
+    
 -- pull current target. false if we didn't, or pulled wrong target
 pullTarget :: AionBot Bool
 pullTarget = getTarget >>= pull where
     pull Nothing  = return False
     pull (Just t) =
         do info $ "pulling " ++ (entity_name t)
-           attackTarget
-           timeout 15 $
-                   noStuck attackTarget $
-                           wait inCombat
+           hold ( amTargetting t ) $
+                do attackTarget
+                   timeout 15 $
+                           noStuck attackTarget $
+                                   wait inCombat
            c <- getCombatants
            case () of
              _ | t `elem` c -> return True  -- we managed to pull the correct target
@@ -310,15 +342,32 @@ killTarget =
                   loot
              return ()
 
+      no_oh_shit_needed =
+          do s <- liftState get
+             t <- time
+             p <- getPlayerEntity
+             let dt = t - last_oh_shit_time s
+             return $ dt < 60 || entity_hp p > 33
+
       rotate_skills =
           do c <- getConfig
              info $ "executing combat rotation!"
-             execute (combat_rotation c)
-
+             v <- hold no_oh_shit_needed $ execute (combat_rotation c)
+             case v of
+               Nothing -> ohShit
+               _ -> return ()
+             rotate_skills
 -- select & kill entity
 kill :: Entity -> AionBot ()
 kill t = do s <- select t
             when s $ killTarget
+
+ohShit :: AionBot ()
+ohShit = do info "OH SHIT OH SHIT OH SHIT!!!!!!!!!!"
+            cfg <- getConfig
+            execute $ oh_shit_rotation cfg
+            t <- time
+            liftState . modify $ \s -> s { last_oh_shit_time = t }
 
 amTargetting :: Entity -> AionBot Bool
 amTargetting e = getTarget >>= \t -> return (t == Just e)
@@ -375,15 +424,6 @@ grind =
              grindy_grind
 
       alive = not <$> isPlayerDead
-      pull_check = do
-          -- just make sure noone else is attacking us
-          maybe_t <- getTarget
-          c <- getCombatants
-          case () of
-            _ | Just t <- maybe_t, not (null c), not (t `elem` c) -> return False -- stop pulling, we are attacked by elsewhere
-              | Just t <- maybe_t, t `elem` c                     -> return True
-              | otherwise                                         -> delay 0.1 >> pull_check
-
 
 safe :: AionBot Bool
 safe =
@@ -397,10 +437,11 @@ safe =
 pickGrindTarget :: AionBot ()
 pickGrindTarget =
     do debug "LOOKING FOR GRIND TARGET!"
+       spark aimSuitable
        picked <- timeout 3 $ pickStatic
        case picked of
          Just True -> debug "PICKED grind target!"
-         _         -> debug "ROTATE, repeat" >> spark (rotateCamera 60) >> pickGrindTarget
+         _         -> debug "ROTATE, repeat" >> pickGrindTarget
     where
       pickStatic :: AionBot Bool
       pickStatic = do
@@ -412,6 +453,21 @@ pickGrindTarget =
                  if ok
                    then return True
                    else nextTarget >> pickStatic
+
+aimSuitable :: AionBot ()
+aimSuitable =
+    do es' <- suitableGrindTargets
+       p <- getPlayer
+       let es = filter (\e -> len (entity_pos e $- player_pos p) < 55) es'
+       when (not . null $ es) $ do
+         i <- liftIO $ randomRIO (0, length es - 1)
+         let e = es !! i
+         aimEntity e
+
+suitableGrindTargets :: AionBot [Entity]
+suitableGrindTargets =
+    do es <- getEntities
+       filterM suitableGrindTarget es
 
 suitableGrindTarget :: Entity -> AionBot Bool
 suitableGrindTarget t =
@@ -516,7 +572,7 @@ noStuck afterUnstuck action =
                !v = speed ps'
            debug $ "v=" ++ show v
            c <- inCombat 
-           if (length ps' < 10 || t - t0 < 3 || c)
+           if (length ps' < 10 || t - t0 < 2 || c)
               then detector t0 ps'
               else do if (v < 0.5)
                         then do unstuck 
@@ -550,6 +606,7 @@ data BotState = BotState { agent_channel    :: CommandChannel IO
                          , entity_map           :: Map Int Entity
                          , combat_map           :: [CombatMob]
                          , combat_last_time_ply :: Float
+                         , last_oh_shit_time :: Float
                          , config               :: AionBotConfig
                          , current_rotation     :: Maybe Rotation
                          }
@@ -773,8 +830,8 @@ updateState gs =
                     | entity_type e == EPlayer = True
                     | otherwise = False
 
-runAionBot :: CommandChannel IO -> GameState -> AionBot () -> IO ()
-runAionBot agent_ch game_state aionbot =
+runAionBot :: CommandChannel IO -> GameState -> AionBotConfig -> AionBot () -> IO ()
+runAionBot agent_ch game_state cfg aionbot =
     do t0 <- getCurrentTime
        let mt = unBot $
                 do -- initial state fetch into monad
@@ -797,16 +854,17 @@ runAionBot agent_ch game_state aionbot =
                   , entity_map = undefined
                   , combat_map = []
                   , combat_last_time_ply = -1000
-                  , config = defaultConfig }
+                  , last_oh_shit_time = -1000
+                  , config = cfg }
 
 -- forks it in background
-runAbortableAionBot :: CommandChannel IO -> GameState -> AionBot () -> IO (ThreadId, IO (), MVar ())
-runAbortableAionBot agent_ch game_state action =
+runAbortableAionBot :: CommandChannel IO -> GameState -> AionBotConfig -> AionBot () -> IO (ThreadId, IO (), MVar ())
+runAbortableAionBot agent_ch game_state cfg action =
     do abort_var <- newEmptyMVar
        abort_fun_var <- newEmptyMVar
        finished_var <- newEmptyMVar
        id <- forkIO $ do
-               runAionBot agent_ch game_state $ do
+               runAionBot agent_ch game_state cfg $ do
                         withSpark (aborter abort_var) $ \_ ->
                                   action
                putMVar finished_var ()
@@ -839,6 +897,6 @@ info :: String -> AionBot ()
 info s = debug s >> liftIO (putStrLn s)
 
 debug :: String -> AionBot ()
-debug s = 
+debug s =
     do t <- getCurrentThread
        liftIO (debugIO $ show t ++ ": " ++ s)

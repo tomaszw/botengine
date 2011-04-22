@@ -3,10 +3,13 @@ module AionBotConfig
     , defaultConfig
     , Rotation (..)
     , RotationElem (..)
+    , readConfig
+    , saveConfig
     ) where
 
 import Keys
 import RemoteCommand
+import Waypoints
 
 data AionBotConfig = AionBotConfig
     {
@@ -17,6 +20,7 @@ data AionBotConfig = AionBotConfig
     , threshold_grind_upper_level :: Int
     , threshold_grind_lower_level :: Int
     , safe_margin :: Float
+    , waypoints :: [Waypoint]
     }
 
 defaultConfig :: AionBotConfig
@@ -32,12 +36,13 @@ defaultConfig =
                                , aqb 5, Delay 0.1 ]
     , heal_self_rotation = Once [ qb 8, Delay 5.0
                                 , qb 9 ]
-    , oh_shit_rotation = RepeatN 5 []
+    , oh_shit_rotation = RepeatN 5 [ aqb 9, Delay 0.1, aqb 8, Delay 0.1, aqb 7, Delay 0.1 ]
     , loot_key = keyQuickbarBase + 0
     -- grind mob this number of levels higher/lower
     , threshold_grind_upper_level = 1
     , threshold_grind_lower_level = 5
     , safe_margin = 2
+    , waypoints = []
     }
     where
       -- quickbar
@@ -54,3 +59,13 @@ data RotationElem = KeyPress KeyCode
                   | Delay Float
                   | Rotation Rotation -- nested rotation
                   deriving ( Eq, Show )
+
+readConfig :: IO AionBotConfig
+readConfig =
+    do ws <- readWaypoints
+       return $ defaultConfig { waypoints = ws }
+
+saveConfig :: AionBotConfig -> IO ()
+saveConfig cfg =
+    do saveWaypoints $ waypoints cfg
+       return ()
